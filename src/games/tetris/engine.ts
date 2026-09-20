@@ -317,7 +317,7 @@ function reachablePoses(board: Board, piece: PieceName, from: Pose): Map<string,
  * spawn — so a piece can be slid or turned under an overhang, not only dropped straight down.
  * Two poses that lock into the same board are one option.
  */
-export function enumeratePlacements(board: Board, piece: PieceName): Placement[] {
+export function enumeratePlacements(board: Board, piece: PieceName, table: GarbageTable = 'linear'): Placement[] {
   const before = boardStats(board);
   const poses = [...reachablePoses(board, piece, spawnPose()).values()].filter((p) => resting(board, piece, p));
   // A stable order a person can read: by rotation, then left to right, then top to bottom.
@@ -346,7 +346,7 @@ export function enumeratePlacements(board: Board, piece: PieceName): Placement[]
       holesRemoved: Math.max(0, before.holes - stats.holes),
       heightDelta: stats.maxHeight - before.maxHeight,
       tuck: !straight,
-      garbageSent: GARBAGE_FOR_LINES[cleared] ?? 0,
+      garbageSent: GARBAGE_TABLES[table][cleared] ?? 0,
       before,
       after: stats,
       afterBoard: after,
@@ -503,10 +503,16 @@ export function boardToText(board: Board): string[] {
 export const GARBAGE = 'G' as const;
 
 /**
- * Rows a clear sends, by lines cleared: the guideline table. A single sends nothing, so the way to
- * attack is to stack up and clear several rows at once rather than to shovel one row at a time.
+ * Rows a clear sends, by lines cleared. `linear` pays one row per line, so every clear is an
+ * attack. `guideline` is the standard table: a single sends nothing, so the way to attack is to
+ * stack up and clear several rows at once rather than to shovel one row at a time.
  */
-export const GARBAGE_FOR_LINES = [0, 0, 1, 2, 4] as const;
+export const GARBAGE_TABLES = {
+  linear: [0, 1, 2, 3, 4],
+  guideline: [0, 0, 1, 2, 4],
+} as const;
+
+export type GarbageTable = keyof typeof GARBAGE_TABLES;
 
 /**
  * Pushes `count` garbage rows in from the bottom, each full except one gap. `overflow` is true

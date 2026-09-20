@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Decision, Player, PlayerConfig } from '../src/core/types';
 import { seededRandom } from '../src/core/types';
 import {
-  GARBAGE_FOR_LINES,
+  GARBAGE_TABLES,
   HEIGHT,
   PIECES,
   SPAWN_X,
@@ -284,9 +284,29 @@ describe('the request a player is handed', () => {
 });
 
 describe('garbage', () => {
-  // Bug: a single line used to send a whole row, which buried both sides within a minute.
-  it('follows the guideline table: a single sends nothing, a Tetris sends four', () => {
-    expect([...GARBAGE_FOR_LINES]).toEqual([0, 0, 1, 2, 4]);
+  it('pays one row per line by default, and keeps the guideline table as a setting', () => {
+    expect(TETRIS_DEFAULTS.garbageTable).toBe('linear');
+    expect([...GARBAGE_TABLES.linear]).toEqual([0, 1, 2, 3, 4]);
+    expect([...GARBAGE_TABLES.guideline]).toEqual([0, 0, 1, 2, 4]);
+  });
+
+  it('sends a row for a single only under the linear table, and says so to the player', () => {
+    const send = (garbageTable: 'linear' | 'guideline') => {
+      const match = new TetrisMatch([mute, mute], { ...TETRIS_DEFAULTS, garbageTable, timeLimitSec: 0 });
+      (match as unknown as { resolveAttack(s: (typeof match.sides)[0], n: number): void }).resolveAttack(match.sides[0], 1);
+      return match.sides[1].pendingGarbage;
+    };
+    expect(send('linear')).toBe(1);
+    expect(send('guideline')).toBe(0);
+
+    const board = bottomRowWithGaps([3, 4, 5, 6]);
+    for (const table of ['linear', 'guideline'] as const) {
+      const placements = enumeratePlacements(board, 'I', table);
+      const single = placements.find((p) => p.linesCleared === 1)!;
+      expect(single.garbageSent).toBe(table === 'linear' ? 1 : 0);
+      const req = buildTetrisRequest(side(board, 'I'), placements, { realtime: false, mode: 'versus', garbageTable: table, opponent: null });
+      expect(req.rules).toContain(table === 'linear' ? 'a single sends one' : 'A single row sends nothing');
+    }
   });
 
   it('cancels incoming garbage before sending any', async () => {

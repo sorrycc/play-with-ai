@@ -6,9 +6,9 @@ friend. The code duel is you against a code agent's CLI.
 
 Games so far:
 
-- **Tetris**: a real-time duel. Same piece sequence, same clock. Clearing several rows at once
-  lands garbage on the other board (the guideline table: a single sends nothing, a Tetris sends
-  four), and rows you clear cancel garbage waiting for you, so attacking and defending are the same
+- **Tetris**: a real-time duel. Same piece sequence, same clock. Clearing rows lands garbage
+  on the other board (one row per line by default; the guideline table, where a single sends
+  nothing and a Tetris sends four, is a setting), and rows you clear cancel garbage waiting for you, so attacking and defending are the same
   move. Both sides see three pieces ahead and can hold one; a piece can be slid or turned under an
   overhang, so every legal placement is on offer, not only the straight drops. A piece keeps falling
   while its player thinks, so latency is part of the game — and an answer that arrives after the

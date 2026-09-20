@@ -12,10 +12,11 @@ import { t } from '../../core/i18n';
 import {
   type Board,
   type BoardStats,
+  type GarbageTable,
   type PieceName,
   type Placement,
   type Pose,
-  GARBAGE_FOR_LINES,
+  GARBAGE_TABLES,
   PIECES,
   SPAWN_X,
   WIDTH,
@@ -67,6 +68,8 @@ export interface TetrisOptions {
   speedup: SpeedupName;
   /** Cleared lines become garbage rows for the opponent; first to top out loses. */
   garbage: boolean;
+  /** Rows a clear sends: one per line, or the guideline table where a single sends nothing. */
+  garbageTable: GarbageTable;
   /** No gravity at all, for any seat: only decision quality is compared. */
   lockstep: boolean;
   /** 0 = no limit */
@@ -78,6 +81,7 @@ export const TETRIS_DEFAULTS: TetrisOptions = {
   gravityMs: 400,
   speedup: 'gentle',
   garbage: true,
+  garbageTable: 'linear',
   lockstep: false,
   timeLimitSec: 180,
 };
@@ -91,9 +95,14 @@ export function modeOf(options: Pick<TetrisOptions, 'garbage' | 'lockstep'>): Te
 export const TETRIS_RULES =
   'You are playing Tetris. The board is 10 columns wide and 20 rows tall. A full row disappears. The game is lost when the stack reaches the top.';
 
+const GARBAGE_RULES: Record<GarbageTable, string> = {
+  linear: ' Every row you clear sends one garbage row to the opponent: a single sends one, and four rows at once (a Tetris) sends four.',
+  guideline:
+    ' Clearing two rows at once sends one garbage row to the opponent, three rows sends two, and four rows (a Tetris) sends four. A single row sends nothing.',
+};
+
 const MODE_RULES: Record<TetrisMode, string> = {
-  versus:
-    ' Clearing two rows at once sends one garbage row to the opponent, three rows sends two, and four rows (a Tetris) sends four. A single row sends nothing. Garbage arriving at your board pushes your whole stack up, and rows you clear cancel garbage waiting for you before it lands.',
+  versus: ' Garbage arriving at your board pushes your whole stack up, and rows you clear cancel garbage waiting for you before it lands.',
   race: ' You and the opponent play separate boards from the same piece sequence; whoever lasts more pieces wins.',
   lockstep: ' There is no clock and no gravity: take the time you need.',
 };
@@ -208,6 +217,8 @@ export interface RequestContext {
   /** True when a clock is running while the player thinks. */
   realtime: boolean;
   mode: TetrisMode;
+  /** Which table `garbageSent` was counted with; only read in versus mode. */
+  garbageTable?: GarbageTable;
   /** Null in a solitaire position, such as the samples a generated algorithm is tried on. */
   opponent: OpponentView | null;
 }
@@ -292,7 +303,7 @@ export function buildTetrisRequest(side: RequestSide, placements: Placement[], c
   }
   return {
     game: 'tetris',
-    rules: TETRIS_RULES + MODE_RULES[ctx.mode],
+    rules: TETRIS_RULES + (versus ? GARBAGE_RULES[ctx.garbageTable ?? 'linear'] : '') + MODE_RULES[ctx.mode],
     question: 'Which placement of `current_piece` should the player choose? Each option describes the board after that placement.',
     priorities: TETRIS_PRIORITIES,
     state: {
@@ -461,7 +472,7 @@ export class TetrisMatch {
 
   /** Rows a clear sends after cancelling whatever is already waiting for the clearing side. */
   private resolveAttack(side: TetrisSide, cleared: number): void {
-    const attack = GARBAGE_FOR_LINES[cleared] ?? 0;
+    const attack = GARBAGE_TABLES[this.options.garbageTable][cleared] ?? 0;
     if (attack <= 0) return;
     const cancelled = Math.min(side.pendingGarbage, attack);
     side.pendingGarbage -= cancelled;
@@ -567,14 +578,14 @@ export class TetrisMatch {
       for (let turn = 0; turn <= 1 && !side.over && !signal.aborted; turn++) {
         const piece = side.current;
         if (collides(side.board, PIECES[piece][0].cells, SPAWN_X, 0)) return this.topOut(side, 'stack');
-        const placements = enumeratePlacements(side.board, piece);
+        const placements = enumeratePlacements(side.board, piece, this.options.garbageTable);
         if (placements.length === 0) return this.topOut(side, 'stack');
         side.active = { piece, ...spawnPose() };
         side.target = null;
 
         // Ask right away; the piece falls while we wait.
         const askedAt = performance.now();
-        const request = buildTetrisRequest(side, placements, { realtime: !lockstep, mode: this.mode(), opponent: this.opponentView(side) });
+        const request = buildTetrisRequest(side, placements, { realtime: !lockstep, mode: this.mode(), garbageTable: this.options.garbageTable, opponent: this.opponentView(side) });
         let decision: Awaited<ReturnType<Player['decide']>> | null = null;
         let settled = false;
         let failed = false;

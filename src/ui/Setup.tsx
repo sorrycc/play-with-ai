@@ -5,6 +5,7 @@ import { ROLES } from '../players';
 import { algos } from '../players/algos';
 import { AlgoPanel, algoForSeat } from './AlgoPanel';
 import { DEFAULT_MODEL, FEATURED_MODELS, loadModels, type ModelInfo } from '../players/llm';
+import { GARBAGE_TABLES, type GarbageTable } from '../games/tetris/engine';
 import { SPEEDUPS, type SpeedupName, type TetrisOptions } from '../games/tetris/match';
 import type { GomokuOptions } from '../games/gomoku/match';
 import { recommendedTickMs, type SnakeOptions } from '../games/snake/match';
@@ -279,7 +280,7 @@ export function Setup({
                 </button>
               ))}
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <Option label={t('opt.gravity', { ms: tetris.gravityMs })} hint={t('opt.gravity.hint')}>
                 <input type="range" min={80} max={1000} step={10} value={tetris.gravityMs} disabled={tetris.lockstep} onChange={(e) => setTetris({ gravityMs: Number(e.target.value) })} className="accent-[var(--color-pink)]" />
               </Option>
@@ -288,6 +289,15 @@ export function Setup({
                   {(Object.keys(SPEEDUPS) as SpeedupName[]).map((id) => (
                     <option key={id} value={id}>
                       {t(`speedup.${id}`)}
+                    </option>
+                  ))}
+                </select>
+              </Option>
+              <Option label={t('opt.garbageTable')} hint={t('opt.garbageTable.hint')}>
+                <select className="field" value={tetris.garbageTable} disabled={!tetris.garbage || tetris.lockstep} onChange={(e) => setTetris({ garbageTable: e.target.value as GarbageTable })}>
+                  {(Object.keys(GARBAGE_TABLES) as GarbageTable[]).map((id) => (
+                    <option key={id} value={id}>
+                      {t(`garbageTable.${id}`)}
                     </option>
                   ))}
                 </select>
