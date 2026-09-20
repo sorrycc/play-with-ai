@@ -97,7 +97,10 @@ function samples2048(): AlgoInput[] {
   for (let move = 0; move < 140; move++) {
     const facts = g2048.analyze(board);
     if (facts.length === 0) break;
-    if ([0, 20, 70, 139].includes(move)) out.push(build2048Request(board, score, facts).data);
+    // A plausible opponent on the other board, so the race fields are not all zero in the samples.
+    const opponentScore = Math.round(score * 0.9);
+    if ([0, 20, 70, 139].includes(move))
+      out.push(build2048Request(board, score, facts, { opponentScore, scoreGap: score - opponentScore, secondsLeft: Math.max(0, 180 - move), movesMade: move }).data);
     // Mostly sound play so the game lasts, with a careless slide now and then so the board gets messy,
     // which is when choices matter.
     const fact = move % 5 === 4 ? facts[move % facts.length] : facts.find((f) => f.dir === g2048.botMove(board))!;
@@ -159,8 +162,9 @@ export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
     samples: snakeSamples,
   },
   '2048': {
-    goal: '2048 on a 4x4 board. A move slides all tiles one way; equal tiles that meet merge and score their sum; then a 2 or 4 appears on a random empty cell. The game ends when nothing can move. Highest score wins, and the match has a clock, so there is no benefit to being slow.',
-    state: 'board: 4 rows of 4 numbers, 0 is empty. score. largestTile.',
+    goal: '2048 on a 4x4 board. A move slides all tiles one way; equal tiles that meet merge and score their sum; then a 2 or 4 appears on a random empty cell. The game ends when nothing can move. You race an opponent who started from the same position on a second board: the higher score when the clock runs out wins, so there is no benefit to being slow.',
+    state:
+      'board: 4 rows of 4 numbers, 0 is empty. score. largestTile. opponentScore: the other board right now. scoreGap: your score minus theirs, positive when you are ahead. secondsLeft: null when the match has no clock. movesMade: how many moves you have played.',
     facts:
       'One option per direction that changes the board (ids "up" "right" "down" "left"). pointsGained, merges. emptyAfter (0-16). largestTileAfter. largestInCornerBefore, largestInCornerAfter: booleans. orderAfter: 0-1, how monotonic rows and columns are (1 is a perfect snake). equalPairsAfter: neighbouring equal tiles, i.e. merges available next. directionsLeftAfter: 0-4 directions still possible before the random tile lands (1 or less is dangerous). boardAfter: the 4x4 board after the slide, before the random tile, so you can evaluate it yourself.',
     samples: samples2048,

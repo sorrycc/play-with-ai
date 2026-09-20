@@ -53,7 +53,8 @@ function loadSetup(): MatchSetup {
       tetris: { ...TETRIS_DEFAULTS, ...saved.tetris },
       gomoku: { ...GOMOKU_DEFAULTS, ...saved.gomoku },
       snake: { ...SNAKE_DEFAULTS, ...saved.snake },
-      g2048: { ...DEFAULTS_2048, ...saved.g2048 },
+      // Pacing is not a user setting here either, and neither is the per-move deadline.
+      g2048: { ...DEFAULTS_2048, ...saved.g2048, minMoveMs: DEFAULTS_2048.minMoveMs, moveDeadlineSec: DEFAULTS_2048.moveDeadlineSec },
       // Pacing is not a user setting, so a value saved by an older version must not stick.
       chess: { ...CHESS_DEFAULTS, ...saved.chess, minMoveMs: CHESS_DEFAULTS.minMoveMs },
       xiangqi: { ...XIANGQI_DEFAULTS, ...saved.xiangqi, minMoveMs: XIANGQI_DEFAULTS.minMoveMs },
@@ -197,7 +198,16 @@ export function App() {
           ) : screen.game === 'snake' ? (
             <SnakeArena key={screen.round} {...common} options={setup.snake} />
           ) : screen.game === '2048' ? (
-            <Arena2048 key={screen.round} {...common} options={setup.g2048} />
+            <Arena2048
+              key={screen.round}
+              {...common}
+              // The same as Tetris: two fixed seats on one seed replay the same race to the same draw.
+              onRematch={() => {
+                if (setup.seats.every((s) => s.kind === 'bot' || s.kind === 'custom')) setSetup((s) => ({ ...s, g2048: { ...s.g2048, seed: 1 + Math.floor(Math.random() * 99999) } }));
+                common.onRematch();
+              }}
+              options={setup.g2048}
+            />
           ) : screen.game === 'code' ? (
             <Suspense fallback={null}>
               <CodeArena key={screen.round} {...common} seats={codeSeats} options={setup.code} />

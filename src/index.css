@@ -289,6 +289,10 @@ body {
 .tile-pop {
   animation: tile-pop 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0.08s both;
 }
+/* A merged tile waits, invisible (`both` holds the 0% frame), until its two halves have slid in. */
+.tile-fuse {
+  animation: tile-pop 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0.13s both;
+}
 
 /*
  * A chess piece travelling to its square. The element fills the destination square, so --dx/--dy

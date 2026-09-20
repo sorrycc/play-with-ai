@@ -218,6 +218,9 @@ export function Setup({
     else if (seats.some((s) => s.kind === 'llm') && tetris.gravityMs < 250) warnings.push(t('warn.fast'));
   }
   if (game === 'snake' && !snake.lockstep && seats.some((s) => s.kind === 'llm') && snakeTick < 1200) warnings.push(t('warn.snakeFast'));
+  if (game === 'snake' && !snake.lockstep && seats.some((s) => s.kind === 'custom') && snakeTick < 200) warnings.push(t('warn.snakeFastAlgo'));
+  // In the 2048 race a seat that thinks for ten seconds loses on move count against anything local.
+  if (game === '2048' && !g2048.lockstep && seats.some((s) => s.kind === 'llm' && s.thinking) && seats.some((s) => s.kind === 'bot' || s.kind === 'custom' || s.kind === 'random')) warnings.push(t('warn.raceSlow'));
   if (seats.some((s) => !usable(s.kind))) warnings.push(t('warn.noKey'));
   // A custom seat is only ready once it points at an algorithm written for this game.
   useSyncExternalStore(algos.subscribe, algos.all);
@@ -377,26 +380,32 @@ export function Setup({
             </div>
           </>
         ) : game === '2048' ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Option label={t('opt.timeLimit')} hint={t('opt.timeLimit.scoreHint')}>
-              <select className="field" value={g2048.timeLimitSec} onChange={(e) => set2048({ timeLimitSec: Number(e.target.value) })}>
-                {[60, 120, 180, 300, 600, 0].map((s) => (
-                  <option key={s} value={s}>
-                    {s === 0 ? t('time.none') : t('time.min', { n: s / 60 })}
-                  </option>
-                ))}
-              </select>
-            </Option>
-            <Option label={t('opt.seed')} hint={t('opt.seed.2048Hint')}>
-              <div className="flex gap-2">
-                <input className="field" type="number" min={1} max={999999} value={g2048.seed} onChange={(e) => set2048({ seed: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} />
-                <button className="btn bg-white !px-3 !py-1" title={t('opt.randomSeed')} onClick={() => set2048({ seed: 1 + Math.floor(Math.random() * 99999) })}>
-                  🎲
-                </button>
-              </div>
-            </Option>
-            <p className="self-center text-sm leading-snug opacity-70">{t('t.rulesNote')}</p>
-          </div>
+          <>
+            <button className="pick px-3 py-2 text-left" aria-pressed={g2048.lockstep} onClick={() => set2048({ lockstep: !g2048.lockstep })}>
+              <span className="block font-bold">{t('t.lockstep')}</span>
+              <span className="block text-xs leading-tight opacity-70">{t('t.lockstep.hint')}</span>
+            </button>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Option label={t('opt.timeLimit')} hint={t('opt.timeLimit.scoreHint')}>
+                <select className="field" value={g2048.timeLimitSec} onChange={(e) => set2048({ timeLimitSec: Number(e.target.value) })}>
+                  {[60, 120, 180, 300, 600, 0].map((s) => (
+                    <option key={s} value={s}>
+                      {s === 0 ? t('time.none') : t('time.min', { n: s / 60 })}
+                    </option>
+                  ))}
+                </select>
+              </Option>
+              <Option label={t('opt.seed')} hint={t('opt.seed.2048Hint')}>
+                <div className="flex gap-2">
+                  <input className="field" type="number" min={1} max={999999} value={g2048.seed} onChange={(e) => set2048({ seed: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} />
+                  <button className="btn bg-white !px-3 !py-1" title={t('opt.randomSeed')} onClick={() => set2048({ seed: 1 + Math.floor(Math.random() * 99999) })}>
+                    🎲
+                  </button>
+                </div>
+              </Option>
+              <p className="self-center text-sm leading-snug opacity-70">{t('t.rulesNote')}</p>
+            </div>
+          </>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             <Option label={t('opt.moveLimit')} hint={t('opt.moveLimit.hint')}>

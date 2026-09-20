@@ -38,6 +38,15 @@ const KEYS_WASD: KeyMap = { w: 'up', d: 'right', s: 'down', a: 'left' };
 
 function BoardView({ side, match }: { side: Side2048; match: Match2048 }) {
   const press = useRef<{ x: number; y: number } | null>(null);
+  const onPointerDown = (e: React.PointerEvent) => {
+    press.current = { x: e.clientX, y: e.clientY };
+    // A swipe that leaves the board still ends on it: a mouse gets no implicit capture the way touch does.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* the pointer went away first; the swipe simply needs to end on the board */
+    }
+  };
   const onPointerUp = (e: React.PointerEvent) => {
     const start = press.current;
     press.current = null;
@@ -53,7 +62,7 @@ function BoardView({ side, match }: { side: Side2048; match: Match2048 }) {
       style={{ width: BOARD + 8, height: BOARD + 8 }}
       role="img"
       aria-label={t('t.boardLabel')}
-      onPointerDown={(e) => (press.current = { x: e.clientX, y: e.clientY })}
+      onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       onPointerCancel={() => (press.current = null)}
     >
@@ -68,7 +77,7 @@ function BoardView({ side, match }: { side: Side2048; match: Match2048 }) {
           // The outer box slides (a CSS transition on transform); the inner one pops when new.
           <div key={tile.id} className="absolute left-0 top-0 transition-transform duration-[120ms] ease-out" style={{ width: CELL, height: CELL, transform: `translate(${x}px, ${y}px)`, zIndex: tile.dying ? 1 : 2 }}>
             <div
-              className={`grid size-full place-items-center rounded-xl border-[3px] border-ink font-bold shadow-[0_3px_0_rgba(0,0,0,0.25)] ${tile.born ? 'tile-pop' : ''}`}
+              className={`grid size-full place-items-center rounded-xl border-[3px] border-ink font-bold shadow-[0_3px_0_rgba(0,0,0,0.25)] ${tile.born ? (tile.fused ? 'tile-fuse' : 'tile-pop') : ''}`}
               style={{ background, color, fontSize: digits >= 4 ? 20 : digits === 3 ? 25 : 30, opacity: side.over ? 0.55 : 1 }}
             >
               {tile.value}
@@ -76,11 +85,31 @@ function BoardView({ side, match }: { side: Side2048; match: Match2048 }) {
           </div>
         );
       })}
+      {side.reached2048 !== null && !side.over && (
+        <div className="pop-in absolute left-1/2 top-1 z-10 -translate-x-1/2 -rotate-3 rounded-full border-[3px] border-ink bg-grape px-3 py-0.5 text-sm font-bold text-white shadow-[3px_3px_0_var(--color-ink)]">{t('t.reached2048')}</div>
+      )}
       {side.over && (
         <div className="absolute inset-0 z-10 grid place-items-center bg-night/55">
           <div className="pop-in -rotate-6 rounded-2xl border-[3px] border-ink bg-pink px-4 py-2 text-xl font-bold text-white shadow-[4px_4px_0_var(--color-ink)]">{t('arena.stuck')}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Touch has no keyboard, and a swipe is not always wanted: the same four moves as buttons. */
+function DirectionPad({ side, match }: { side: Side2048; match: Match2048 }) {
+  const key = (dir: Dir, label: string, area: string) => (
+    <button key={dir} className="btn bg-white !px-0 !py-1.5 text-lg" style={{ gridArea: area }} aria-label={dir} data-silent onPointerDown={() => match.input(side.index, dir)}>
+      {label}
+    </button>
+  );
+  return (
+    <div className="grid w-full max-w-[220px] gap-1.5" style={{ gridTemplateAreas: '". up ." "left down right"', gridTemplateColumns: '1fr 1fr 1fr' }}>
+      {key('up', '↑', 'up')}
+      {key('left', '←', 'left')}
+      {key('down', '↓', 'down')}
+      {key('right', '→', 'right')}
     </div>
   );
 }
@@ -92,12 +121,14 @@ function sideRows(side: Side2048): StatRow[] {
     [t('stat.moves'), side.moves],
   ];
   if (side.human) return base;
-  return [...base, [t('stat.calls'), side.stats.calls], [t('stat.fallbacks'), side.stats.invalid + side.stats.errors], ...modelStatRows(side.stats, false)];
+  // A deadline the seat missed cost it a move just as an invalid answer does: both are bot fallbacks.
+  return [...base, [t('stat.calls'), side.stats.calls], [t('stat.fallbacks'), side.stats.invalid + side.stats.errors + side.stats.missed], ...modelStatRows(side.stats, false)];
 }
 
 function SideView({ side, match, keysHint }: { side: Side2048; match: Match2048; keysHint: string | null }) {
   const won = match.result?.winner === side.index;
-  const leading = match.sides[side.index === 0 ? 1 : 0].score < side.score;
+  const other = match.sides[side.index === 0 ? 1 : 0];
+  const leading = other.score < side.score;
   return (
     <section className={`flex w-full max-w-[320px] flex-col gap-3 ${seatMood(match.result, side.index)}`}>
       <PlayerBadge
@@ -112,6 +143,17 @@ function SideView({ side, match, keysHint }: { side: Side2048; match: Match2048;
         <span className="font-mono text-3xl font-bold">{side.score.toLocaleString()}</span>
       </div>
       <BoardView side={side} match={match} />
+      {side.human && match.status === 'running' && !side.over && (
+        <div className="flex flex-col items-center gap-2">
+          <DirectionPad side={side} match={match} />
+          {/* Grinding on alone behind a board that cannot move any more is nobody's idea of a game. */}
+          {other.over && (
+            <button className="btn bg-white !py-1 text-xs" onClick={() => match.concede(side.index)}>
+              {t('t.concede')}
+            </button>
+          )}
+        </div>
+      )}
       {keysHint && <p className="text-center text-xs opacity-60">{keysHint}</p>}
       <StatsGrid rows={sideRows(side)} />
     </section>
@@ -127,8 +169,11 @@ function compareRows(match: Match2048): CompareRow[] {
     both(t('stat.bestTile'), (s) => s.best),
     both(t('stat.moves'), (s) => s.moves),
     both(t('cmp.movesPerMin'), (s) => Math.round(s.moves / minutes)),
+    // How well the seat played, as opposed to how fast it answered.
+    both(t('cmp.pointsPerMove'), (s) => (s.moves ? Math.round(s.score / s.moves) : '–')),
+    both(t('cmp.reached2048'), (s) => (s.reached2048 === null ? '–' : t('t.atMove', { n: s.reached2048 }))),
     both(t('stat.avgLatency'), (s) => (s.stats.latency ? fmtMs(s.stats.latency / s.stats.calls) : '–')),
-    both(t('cmp.botFallbacks'), (s) => (s.human ? '–' : s.stats.invalid + s.stats.errors)),
+    both(t('cmp.botFallbacks'), (s) => (s.human ? '–' : s.stats.invalid + s.stats.errors + s.stats.missed)),
     both(t('cmp.tokensInOut'), (s) => (s.stats.inputTokens ? `${s.stats.inputTokens.toLocaleString()} / ${s.stats.outputTokens.toLocaleString()}` : '–')),
     both(t('stat.cost'), (s) => fmtUsd(s.stats.cost)),
     both(t('cmp.costPerMove'), (s) => (s.stats.calls && s.stats.cost ? fmtUsd(s.stats.cost / s.stats.calls, 5) : '–')),
@@ -175,6 +220,8 @@ export function Arena2048({
     const maps: [KeyMap | null, KeyMap | null] = humans === 2 ? [KEYS_WASD, KEYS_ARROWS] : [seats[0].kind === 'human' ? solo : null, seats[1].kind === 'human' ? solo : null];
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
+      // Auto-repeat would let a held key play the board by itself.
+      if (e.repeat) return;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       maps.forEach((map, index) => {
@@ -221,7 +268,14 @@ export function Arena2048({
 
       <div className="flex w-full flex-wrap items-start justify-center gap-x-12 gap-y-8">
         <SideView side={A} match={match} keysHint={A.human ? hint(0) : null} />
-        <div className="hidden self-center text-5xl font-bold text-pink [-webkit-text-stroke:2px_var(--color-ink)] lg:block">VS</div>
+        {/* The whole drama of a race is the gap, so it goes between the two boards. */}
+        <div className="hidden select-none flex-col items-center gap-1 self-center lg:flex">
+          <span className="text-5xl font-bold text-pink [-webkit-text-stroke:2px_var(--color-ink)]">VS</span>
+          <span className="toy-sm px-3 py-0.5 text-center font-mono text-xs font-bold">
+            {A.score === B.score ? t('t.level') : t('t.ahead', { n: Math.abs(A.score - B.score).toLocaleString() })}
+            {A.score !== B.score && <span className="ml-1">{A.score > B.score ? '←' : '→'}</span>}
+          </span>
+        </div>
         <SideView side={B} match={match} keysHint={B.human ? hint(1) : null} />
       </div>
 
@@ -230,7 +284,10 @@ export function Arena2048({
           result={match.result}
           humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
           open={resultOpen}
-          detail={t('detail.2048', { clock: formatClock(match.result.elapsedMs), seed: options.seed })}
+          detail={
+            t('detail.2048', { clock: formatClock(match.result.elapsedMs), seed: options.seed }) +
+            (match.first2048 !== null ? ` · ${t('t.first2048', { name: match.sides[match.first2048].player.name })}` : '')
+          }
           players={players}
           rows={compareRows(match)}
           onRematch={onRematch}
