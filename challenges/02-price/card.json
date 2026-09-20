@@ -1,0 +1,52 @@
+{
+  "level": 1,
+  "title": {
+    "zh": "5 分钱不是 5 毛钱",
+    "en": "Five cents is not fifty"
+  },
+  "intro": {
+    "zh": "formatPrice 把“分”变成价格：1234 变成 $12.34。但 5 分会显示成 $0.5，应该是 $0.05。",
+    "en": "formatPrice turns cents into a price: 1234 becomes $12.34. But 5 cents shows as $0.5 and should be $0.05."
+  },
+  "tasks": {
+    "zh": [
+      "小数点后永远是两位，不够就在前面补 0。",
+      "原来就对的价格保持不变。"
+    ],
+    "en": [
+      "Always two digits after the point, padded with a leading 0.",
+      "Prices that were already right stay the same."
+    ]
+  },
+  "examples": [
+    {
+      "input": "formatPrice(5)",
+      "output": "'$0.05'"
+    },
+    {
+      "input": "formatPrice(1200)",
+      "output": "'$12.00'"
+    },
+    {
+      "input": "formatPrice(1909)",
+      "output": "'$19.09'"
+    },
+    {
+      "input": "formatPrice(1234)",
+      "output": "'$12.34'"
+    }
+  ],
+  "hint": {
+    "zh": "format-price.js 里的 rest：用 .padStart(2, '0') 补到两位。",
+    "en": "The rest variable in format-price.js: pad it to two digits with .padStart(2, '0')."
+  },
+  "files": [
+    "format-price.js",
+    "format-price.test.js"
+  ],
+  "publicTest": [
+    "format-price.test.js"
+  ],
+  "open": "format-price.js",
+  "test": "node"
+}

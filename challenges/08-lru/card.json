@@ -1,0 +1,52 @@
+{
+  "level": 3,
+  "title": {
+    "zh": "让缓存学会忘记",
+    "en": "Teach the cache to forget"
+  },
+  "intro": {
+    "zh": "LruCache 最多只该存 capacity 条，满了就丢掉最久没用过的那条。现在它什么都不丢，也不知道谁最近被用过。keys() 按“最久没用 → 最近用过”返回。",
+    "en": "LruCache should hold at most capacity entries and drop the least recently used when full. Today it drops nothing and has no idea what was used recently. keys() lists them from least to most recently used."
+  },
+  "tasks": {
+    "zh": [
+      "超过 capacity 时，丢掉最久没用过的那条。",
+      "get 命中算一次使用；没命中返回 undefined，什么都不变。",
+      "set 一个已有的 key 算一次使用，更新值，不丢任何东西。",
+      "set 仍然返回 this，可以链式调用。"
+    ],
+    "en": [
+      "Over capacity, the least recently used entry is dropped.",
+      "A get that hits counts as a use; a miss returns undefined and changes nothing.",
+      "Setting a key that is already there counts as a use, updates the value and drops nothing.",
+      "set still returns this, so calls chain."
+    ]
+  },
+  "examples": [
+    {
+      "input": "new LruCache(2).set('a', 1).set('b', 2).set('c', 3).keys()",
+      "output": "['b', 'c']"
+    },
+    {
+      "input": "new LruCache(2).set('a', 1).set('b', 2).set('a', 9).set('c', 3).keys()",
+      "output": "['a', 'c']"
+    },
+    {
+      "input": "c = new LruCache(2).set('a', 1).set('b', 2); c.get('a'); c.set('c', 3).keys()",
+      "output": "['a', 'c']"
+    }
+  ],
+  "hint": {
+    "zh": "Map 记得插入顺序：删掉再插入，这个 key 就排到了最后。",
+    "en": "A Map remembers insertion order: delete a key and set it again, and it moves to the end."
+  },
+  "files": [
+    "lru-cache.js",
+    "lru-cache.test.js"
+  ],
+  "publicTest": [
+    "lru-cache.test.js"
+  ],
+  "open": "lru-cache.js",
+  "test": "node"
+}

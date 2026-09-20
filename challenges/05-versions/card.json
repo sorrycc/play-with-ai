@@ -1,0 +1,54 @@
+{
+  "level": 2,
+  "title": {
+    "zh": "1.10 比 1.9 新",
+    "en": "1.10 is newer than 1.9"
+  },
+  "intro": {
+    "zh": "compareVersions 比较两个版本号，返回 -1、0 或 1。它现在按文本比，所以认为 1.10.0 比 1.9.0 旧。",
+    "en": "compareVersions compares two versions and returns -1, 0 or 1. It compares them as text, so it thinks 1.10.0 is older than 1.9.0."
+  },
+  "tasks": {
+    "zh": [
+      "按点分开，每一段当数字比较。",
+      "段数不一样时，缺的段当 0：1.2 和 1.2.0 相同。",
+      "原来就对的结果保持不变。"
+    ],
+    "en": [
+      "Split on the dots and compare each part as a number.",
+      "When one has fewer parts, a missing part counts as 0: 1.2 equals 1.2.0.",
+      "Results that were already right stay the same."
+    ]
+  },
+  "examples": [
+    {
+      "input": "compareVersions('1.10.0', '1.9.0')",
+      "output": "1"
+    },
+    {
+      "input": "compareVersions('9.9.9', '10.0.0')",
+      "output": "-1"
+    },
+    {
+      "input": "compareVersions('1.2', '1.2.0')",
+      "output": "0"
+    },
+    {
+      "input": "compareVersions('1.2', '1.2.1')",
+      "output": "-1"
+    }
+  ],
+  "hint": {
+    "zh": "split('.') 之后 map(Number)，循环到较长那个的长度，缺的用 ?? 0。",
+    "en": "split('.') then map(Number), loop to the longer length, and use ?? 0 for a missing part."
+  },
+  "files": [
+    "compare-versions.js",
+    "compare-versions.test.js"
+  ],
+  "publicTest": [
+    "compare-versions.test.js"
+  ],
+  "open": "compare-versions.js",
+  "test": "node"
+}

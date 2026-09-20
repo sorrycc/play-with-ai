@@ -1,0 +1,48 @@
+{
+  "level": 1,
+  "title": {
+    "zh": "让 range 能跳着数",
+    "en": "Let range count in steps"
+  },
+  "intro": {
+    "zh": "range(1, 4) 返回 [1, 2, 3]，现在只能一个一个数。给它加第三个参数 step。",
+    "en": "range(1, 4) returns [1, 2, 3], and can only count by one. Give it a third argument, step."
+  },
+  "tasks": {
+    "zh": [
+      "传了 step 时，每次加 step。",
+      "不传 step 时和现在一样，每次加 1。"
+    ],
+    "en": [
+      "With step, count up by step each time.",
+      "Without step nothing changes: count by 1."
+    ]
+  },
+  "examples": [
+    {
+      "input": "range(0, 10, 5)",
+      "output": "[0, 5]"
+    },
+    {
+      "input": "range(1, 8, 3)",
+      "output": "[1, 4, 7]"
+    },
+    {
+      "input": "range(1, 4)",
+      "output": "[1, 2, 3]"
+    }
+  ],
+  "hint": {
+    "zh": "range.js 里改两处：参数加上 step = 1，循环里的 i += 1 改成 i += step。",
+    "en": "Two edits in range.js: add a step = 1 parameter, and turn i += 1 into i += step."
+  },
+  "files": [
+    "range.js",
+    "range.test.js"
+  ],
+  "publicTest": [
+    "range.test.js"
+  ],
+  "open": "range.js",
+  "test": "node"
+}

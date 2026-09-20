@@ -1,0 +1,8 @@
+{
+	"name": "compare-versions",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "node --test"
+	}
+}

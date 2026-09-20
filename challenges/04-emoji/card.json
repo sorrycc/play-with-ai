@@ -1,0 +1,56 @@
+{
+  "level": 2,
+  "title": {
+    "zh": "让 emoji 也有名字",
+    "en": "Give emoji a name"
+  },
+  "intro": {
+    "zh": "slugify 把一句话变成网址里能用的别名。它认识 🦄 和 ♥，但遇到 🚀 和 🔥 会直接丢掉。",
+    "en": "slugify turns a sentence into a URL slug. It knows 🦄 and ♥, but silently drops 🚀 and 🔥."
+  },
+  "tasks": {
+    "zh": [
+      "🚀 变成 rocket，🔥 变成 fire，和已有的 🦄 一样作为独立单词。",
+      "用户通过 customReplacements 传入同一个 emoji 时，用户的写法优先。",
+      "现有测试全部通过。"
+    ],
+    "en": [
+      "🚀 becomes rocket and 🔥 becomes fire, each a word of its own, the way 🦄 already works.",
+      "When the caller passes the same emoji in customReplacements, the caller's version wins.",
+      "Every existing test still passes."
+    ]
+  },
+  "examples": [
+    {
+      "input": "slugify('Ship it 🚀')",
+      "output": "'ship-it-rocket'"
+    },
+    {
+      "input": "slugify('🔥 hot take')",
+      "output": "'fire-hot-take'"
+    },
+    {
+      "input": "slugify('go 🚀', {customReplacements: [['🚀', ' launch ']]})",
+      "output": "'go-launch'"
+    },
+    {
+      "input": "slugify('foo🦄')",
+      "output": "'foo-unicorn'"
+    }
+  ],
+  "hint": {
+    "zh": "只用改 overridable-replacements.js：照着 🦄 那一行，加上 ['🚀', ' rocket '] 和 ['🔥', ' fire ']。",
+    "en": "Only overridable-replacements.js needs a change: next to the 🦄 line, add ['🚀', ' rocket '] and ['🔥', ' fire ']."
+  },
+  "open": "overridable-replacements.js",
+  "repo": "sindresorhus/slugify",
+  "files": [
+    "overridable-replacements.js",
+    "index.js",
+    "test.js"
+  ],
+  "publicTest": [
+    "test.js"
+  ],
+  "test": "ava"
+}

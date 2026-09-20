@@ -1,0 +1,50 @@
+{
+  "level": 1,
+  "title": {
+    "zh": "回文不挑大小写",
+    "en": "Palindromes, whatever the case"
+  },
+  "intro": {
+    "zh": "isPalindrome 判断一句话正着读和倒着读是否一样。现在 Level 和 never odd or even 都被判成“不是”。",
+    "en": "isPalindrome tells whether a text reads the same backwards. Today it says no to Level and to never odd or even."
+  },
+  "tasks": {
+    "zh": [
+      "比较前忽略大小写。",
+      "比较前忽略空格。",
+      "不是回文的仍然返回 false。"
+    ],
+    "en": [
+      "Ignore upper and lower case before comparing.",
+      "Ignore spaces before comparing.",
+      "What is not a palindrome still returns false."
+    ]
+  },
+  "examples": [
+    {
+      "input": "isPalindrome('Level')",
+      "output": "true"
+    },
+    {
+      "input": "isPalindrome('Never odd or even')",
+      "output": "true"
+    },
+    {
+      "input": "isPalindrome('Hello World')",
+      "output": "false"
+    }
+  ],
+  "hint": {
+    "zh": "is-palindrome.js 里的 clean：text.toLowerCase().replaceAll(' ', '')。",
+    "en": "The clean variable in is-palindrome.js: text.toLowerCase().replaceAll(' ', '')."
+  },
+  "files": [
+    "is-palindrome.js",
+    "is-palindrome.test.js"
+  ],
+  "publicTest": [
+    "is-palindrome.test.js"
+  ],
+  "open": "is-palindrome.js",
+  "test": "node"
+}
