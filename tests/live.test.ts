@@ -14,9 +14,15 @@ import { buildGomokuRequest } from '../src/games/gomoku/match';
 
 const B = process.env.LIVE_BASE ?? '';
 const it = B ? liveIt : liveIt.skip;
+// Every route needs the login cookie: ADMIN_PASSWORD here must match the server's.
+let cookie: Promise<string> | null = null;
+const login = () =>
+  (cookie ??= fetch(`${B}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: process.env.ADMIN_PASSWORD || '12306' }) }).then(
+    (r) => (r.headers.get('set-cookie') ?? '').split(';')[0],
+  ));
 const post = async (path: string, body: unknown) => {
   const t = Date.now();
-  const r = await fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(B + path, { method: 'POST', headers: { 'content-type': 'application/json', cookie: await login() }, body: JSON.stringify(body) });
   return { status: r.status, ms: Date.now() - t, json: await r.json() };
 };
 

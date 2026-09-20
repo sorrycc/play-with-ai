@@ -6,4 +6,5 @@
 //   2  /api/generate (custom algorithms), optionIds on /api/llm
 //   3  /api/duel/* (code duel), agents in /api/config
 //   4  /api/duel/check (Settings checks an agent)
-export const API_VERSION = 4;
+//   5  /api/auth, /api/login, /api/logout: everything else needs the admin password
+export const API_VERSION = 5;

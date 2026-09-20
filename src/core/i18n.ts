@@ -18,6 +18,11 @@ const zh = {
   'nav.turnSoundOff': '关闭声音',
   'nav.switchLang': 'Switch to English',
   'nav.otherLang': 'EN',
+  'login.title': '先登录',
+  'login.hint': '输入管理员密码开始',
+  'login.password': '管理员密码',
+  'login.enter': '进入',
+  'login.wrong': '密码不对',
 
   'hero.a': '和',
   'hero.b': 'AI',
@@ -557,6 +562,11 @@ const en: Record<TextKey, string> = {
   'nav.turnSoundOff': 'Turn sound off',
   'nav.switchLang': '切换到中文',
   'nav.otherLang': '中文',
+  'login.title': 'Log in first',
+  'login.hint': 'Enter the admin password to start',
+  'login.password': 'Admin password',
+  'login.enter': 'Enter',
+  'login.wrong': 'Wrong password',
 
   'hero.a': 'Play',
   'hero.b': 'with',

@@ -19,6 +19,7 @@ import { TETRIS_DEFAULTS } from './games/tetris/match';
 import { TetrisArena } from './games/tetris/TetrisArena';
 import { DEFAULT_MODEL } from './players/llm';
 import { Floaters, Lobby } from './ui/Lobby';
+import { LoginPage, fetchAuthed } from './ui/Login';
 import { SettingsPage } from './ui/Settings';
 import { Setup, type ApiConfig, type MatchSetup } from './ui/Setup';
 
@@ -70,12 +71,22 @@ export function App() {
   const [setup, setSetup] = useState<MatchSetup>(loadSetup);
   const [api, setApi] = useState<ApiConfig | null>(null);
 
+  // null until the server says whether this browser already carries the login cookie.
+  const [authed, setAuthed] = useState<boolean | null>(null);
+
   useEffect(() => {
+    fetchAuthed()
+      .then(setAuthed)
+      .catch(() => setAuthed(false));
+  }, []);
+
+  useEffect(() => {
+    if (!authed) return;
     fetch('/api/config')
       .then((r) => r.json())
       .then(setApi)
       .catch(() => setApi({ zenmux: false, jev: false, agents: [] }));
-  }, []);
+  }, [authed]);
 
   const muted = useSyncExternalStore(sfx.subscribe, () => sfx.muted);
   // Reading the language here re-renders the whole tree on a switch, which is what makes every
@@ -163,15 +174,16 @@ export function App() {
           </p>
         </div>
       )}
-      {screen.name === 'lobby' && <Lobby onPick={(game) => setScreen({ name: 'setup', game })} onSettings={() => setScreen({ name: 'settings' })} />}
-      {screen.name === 'settings' && <SettingsPage api={api} onBack={lobby} />}
-      {screen.name === 'setup' &&
+      {authed === false && <LoginPage onAuthed={() => setAuthed(true)} />}
+      {authed && screen.name === 'lobby' && <Lobby onPick={(game) => setScreen({ name: 'setup', game })} onSettings={() => setScreen({ name: 'settings' })} />}
+      {authed && screen.name === 'settings' && <SettingsPage api={api} onBack={lobby} />}
+      {authed && screen.name === 'setup' &&
         (screen.game === 'code' ? (
           <CodeSetup initial={setup} api={api} onStart={(next) => start('code', next)} onBack={lobby} />
         ) : (
           <Setup game={screen.game} initial={setup} api={api} onStart={(next) => start(screen.game, next)} onBack={lobby} />
         ))}
-      {screen.name === 'play' &&
+      {authed && screen.name === 'play' &&
         (() => {
           const common = {
             seats: setup.seats,

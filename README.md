@@ -18,7 +18,7 @@ The idea and the Tetris engine come from [trungdq88/jev-tetris](https://github.c
 Requires Node.js 20.6 or newer.
 
 ```sh
-cp .env.example .env      # ZENMUX_API_KEY (AI model), TYPESAFE_API_KEY (Jev)
+cp .env.example .env      # ADMIN_PASSWORD (login), ZENMUX_API_KEY (AI model), TYPESAFE_API_KEY (Jev)
 npm install
 npm run dev               # http://127.0.0.1:5173
 npm test                  # no network
@@ -26,8 +26,8 @@ npm test                  # no network
 
 A role whose key is missing is greyed out. Keys stay in the proxy (`server/api.mjs`). The code duel
 needs `qodercli` on the `PATH`, signed in; practice mode needs nothing. `npm run build && npm start`
-serves the built site. Before going public, rate-limit the proxy: anyone who can reach `/api/llm`
-spends your ZenMux credit.
+serves the built site. The page asks for `ADMIN_PASSWORD` (12306 when unset) before any other API
+route answers, so change it before going public: anyone who gets in spends your ZenMux credit.
 
 ## How it works
 

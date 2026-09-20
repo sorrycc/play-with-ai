@@ -2,6 +2,9 @@
 // (server/index.mjs). The browser never sees a key: it posts to /api/* and this module adds
 // the credential from the environment.
 //
+//   GET  /api/auth    whether this browser is logged in
+//   POST /api/login   the admin password for a cookie; every route below needs that cookie
+//   POST /api/logout
 //   GET  /api/config  which providers have a key
 //   GET  /api/models  ZenMux chat models with prices (cached)
 //   POST /api/llm     one move: a chat completion through ZenMux that must name an option id
@@ -9,6 +12,7 @@
 //   POST /api/jev     TypeSafe System One (api.typesafe.ai rejects browser origins)
 //   /api/duel/*       the code duel: a person against a code agent's CLI (see duel.mjs)
 
+import { createAuth } from './auth.mjs';
 import { createDuel, isLocalRequest } from './duel.mjs';
 import { API_VERSION } from './version.mjs';
 
@@ -68,6 +72,21 @@ export function createApi(env) {
   const typesafeKey = (env.TYPESAFE_API_KEY || '').trim();
   let modelsCache = null; // { at, models }
   const duel = createDuel();
+  const auth = createAuth(env);
+  // Wrong guesses queue up behind each other, one a second across all clients, so a short password
+  // can't be brute-forced by guessing in parallel. A correct password never waits.
+  let failures = Promise.resolve();
+
+  async function login(req, res) {
+    const body = await readJson(req);
+    if (!auth.passwordOk(body?.password)) {
+      await (failures = failures.then(() => new Promise((resolve) => setTimeout(resolve, 1000))));
+      return send(res, 401, { error: 'wrong_password', message: 'Wrong password.' });
+    }
+    const secure = req.headers['x-forwarded-proto'] === 'https' || Boolean(req.socket?.encrypted);
+    res.writeHead(204, { 'Set-Cookie': auth.loginCookie(secure), 'Cache-Control': 'no-store' });
+    res.end();
+  }
 
   async function models() {
     if (modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) return modelsCache.models;
@@ -254,7 +273,17 @@ export function createApi(env) {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/')) return false;
     try {
-      if (url.pathname === '/api/config' && req.method === 'GET') {
+      if (url.pathname === '/api/auth' && req.method === 'GET') {
+        send(res, 200, { authed: auth.authed(req.headers.cookie) });
+      } else if (url.pathname === '/api/login' && req.method === 'POST') {
+        await login(req, res);
+      } else if (url.pathname === '/api/logout' && req.method === 'POST') {
+        res.writeHead(204, { 'Set-Cookie': auth.logoutCookie, 'Cache-Control': 'no-store' });
+        res.end();
+      } else if (!auth.authed(req.headers.cookie)) {
+        // Every route past this one spends the keys in .env or runs a CLI on this machine.
+        send(res, 401, { error: 'unauthorized', message: 'Log in first.' });
+      } else if (url.pathname === '/api/config' && req.method === 'GET') {
         send(res, 200, { zenmux: Boolean(zenmuxKey), jev: Boolean(typesafeKey), agents: await duel.availableAgents(), version: API_VERSION });
       } else if (url.pathname === '/api/models' && req.method === 'GET') {
         send(res, 200, { models: await models() });
