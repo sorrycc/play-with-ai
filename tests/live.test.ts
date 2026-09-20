@@ -29,7 +29,7 @@ const clearing = placements.find((p) => p.linesCleared === 1)!.id;
 const g = emptyGomokuBoard();
 for (const c of [3, 4, 5, 6]) g[at(7, c)] = BLACK;
 g[at(7, 2)] = WHITE; g[at(9, 4)] = WHITE; g[at(9, 5)] = WHITE;
-const gReq = buildGomokuRequest(g, WHITE, candidates(g, WHITE), 8, 'G8');
+const gReq = buildGomokuRequest(g, WHITE, candidates(g, WHITE), 8, [at(7, 2), at(9, 4), at(9, 5), at(7, 6)]);
 
 it('llm tetris', async () => {
   const r = await post('/api/llm', { model: 'deepseek/deepseek-v4.1-flash', thinking: false, messages: buildMessages(tReq) });

@@ -57,14 +57,16 @@ function tetrisSamples(): AlgoInput[] {
 function gomokuSamples(): AlgoInput[] {
   const random = seededRandom(3);
   const board = gomoku.emptyGomokuBoard();
+  const history: number[] = [];
   const out: AlgoInput[] = [];
   let stone: gomoku.Stone = gomoku.BLACK;
   for (let move = 1; move <= 17; move++) {
     const list = gomoku.candidates(board, stone);
-    if ([1, 4, 9, 16].includes(move)) out.push(buildGomokuRequest(board, stone, list, move, null).data);
+    if ([1, 4, 9, 16].includes(move)) out.push(buildGomokuRequest(board, stone, list, move, history).data);
     // Not always the best move, so that threats appear on the board.
     const pick = move % 3 === 0 ? list[Math.floor(random() * Math.min(6, list.length))] : gomoku.botMove(list, random);
     board[pick.index] = stone;
+    history.push(pick.index);
     if (gomoku.winningLine(board, pick.index)) break;
     stone = gomoku.other(stone);
   }
@@ -139,9 +141,10 @@ export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
   },
   gomoku: {
     goal: 'Gomoku (five in a row) on a 15x15 board; players alternate placing stones, and five or more in a row, column or diagonal wins.',
-    state: 'board: 15 strings of 15 chars, top row first, "X" black, "O" white, "." empty. size: 15. you, opponent: "X" or "O". moveNumber.',
+    state:
+      'board: 15 strings of 15 chars, top row first, "X" black, "O" white, "." empty. size: 15. you, opponent: "X" or "O". moveNumber (1 for the first stone of the game). lastMove: the opponent\'s last cell, e.g. "H8", or null on the first move. moveHistory: every cell played so far, oldest first.',
     facts:
-      'The options are the ~20 most relevant empty cells; every winning move and every forced block is always among them. row, col (0-14). makes: the best shape this stone makes for you, one of "five", "open_four", "four", "open_three", "three", "open_two", "two", "none". blocks: the best shape the opponent would make by playing here instead, same vocabulary. attackScore, defenseScore: numeric value of those shapes summed over the four directions (five 1000000, open_four 100000, four 10000, open_three 5000, three 500, open_two 200, two 40). attackThreats, defenseThreats: how many directions make a four or open three (2+ is a fork). distanceToCentre: 0-7.',
+      'The options are the most relevant empty cells, usually around 20 but as few as 8 and more whenever a forcing move would otherwise be cut; every winning move, every forced block and every fork on either side is always among them. They are listed by board position, so the order says nothing about how good a move is. row, col (0-14, row 0 is the top row of `board`). makes: the best shape this stone makes for you, one of "five", "open_four", "double_four" (a four in two directions at once, which wins just as an open four does), "four", "open_three", "three", "open_two", "two", "none". blocks: the best shape the opponent would make by playing here instead, same vocabulary. winsNow: this stone makes five and wins the game. opponentWinsHereNext: leave this cell and the opponent wins with it next turn. forcing: makes a shape the opponent has to answer ("five", "open_four", "double_four", "four" or "open_three"). createsDoubleThreat: makes a four or an open three in two directions at once, which the opponent cannot answer in one move. attackScore, defenseScore: the value of those shapes summed over the four directions (five 1000000, open_four 100000, four 10000, open_three 5000, three 500, open_two 200, two 40), plus 50000 when the move is a double threat and 80000 when it is a double four, so the number is not a plain sum of the four shapes. attackThreats, defenseThreats: how many directions make a four or open three (2+ is a fork). distanceToCentre: 0-7.',
     samples: gomokuSamples,
   },
   snake: {

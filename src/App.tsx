@@ -192,7 +192,8 @@ export function App() {
               options={setup.tetris}
             />
           ) : screen.game === 'gomoku' ? (
-            <GomokuArena key={screen.round} {...common} options={setup.gomoku} />
+            // Black has the edge in freestyle, so a rematch hands the first move to the other seat.
+            <GomokuArena key={screen.round} {...common} seats={screen.round % 2 === 0 ? [setup.seats[1], setup.seats[0]] : setup.seats} options={setup.gomoku} />
           ) : screen.game === 'snake' ? (
             <SnakeArena key={screen.round} {...common} options={setup.snake} />
           ) : screen.game === '2048' ? (

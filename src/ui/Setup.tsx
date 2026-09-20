@@ -316,7 +316,16 @@ export function Setup({
             >
               <input type="range" min={8} max={40} step={1} value={gomoku.candidateLimit} onChange={(e) => setSetup((s) => ({ ...s, gomoku: { ...s.gomoku, candidateLimit: Number(e.target.value) } }))} className="accent-[var(--color-pink)]" />
             </Option>
-            <p className="self-center text-sm leading-snug opacity-70">{t('gomoku.rulesNote')}</p>
+            <Option label={t('opt.moveTime')} hint={t('opt.moveTime.hint')}>
+              <select className="field" value={gomoku.moveLimitMs} onChange={(e) => setSetup((s) => ({ ...s, gomoku: { ...s.gomoku, moveLimitMs: Number(e.target.value) } }))}>
+                {[15_000, 30_000, 60_000, 120_000, 0].map((ms) => (
+                  <option key={ms} value={ms}>
+                    {ms === 0 ? t('time.none') : ms >= 60_000 ? t('time.min', { n: ms / 60_000 }) : t('time.sec', { n: ms / 1000 })}
+                  </option>
+                ))}
+              </select>
+            </Option>
+            <p className="self-center text-sm leading-snug opacity-70 sm:col-span-2">{t('gomoku.rulesNote')}</p>
           </div>
         ) : game === 'snake' ? (
           <>

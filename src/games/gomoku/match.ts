@@ -10,13 +10,15 @@ import {
   type Stone,
   BLACK,
   CELLS,
+  EMPTY,
   WHITE,
-  botMove,
+  bestMove,
   candidates,
   cellId,
   describeCandidate,
   emptyGomokuBoard,
   gomokuBoardToText,
+  isForcing,
   parseCellId,
   winningLine,
 } from './engine';
@@ -26,9 +28,11 @@ export interface GomokuOptions {
   candidateLimit: number;
   /** Shortest time between two moves, so an instant player can still be followed by eye. */
   minMoveMs: number;
+  /** How long a model seat may think before the classic bot answers for it; 0 for no limit. */
+  moveLimitMs: number;
 }
 
-export const GOMOKU_DEFAULTS: GomokuOptions = { candidateLimit: 20, minMoveMs: 450 };
+export const GOMOKU_DEFAULTS: GomokuOptions = { candidateLimit: 20, minMoveMs: 450, moveLimitMs: 120_000 };
 
 export const GOMOKU_RULES =
   'You are playing Gomoku (five in a row) on a 15x15 board. Players alternate placing one stone. The first to get five or more of their stones in an unbroken row, column or diagonal wins.';
@@ -37,7 +41,7 @@ export const GOMOKU_PRIORITIES = [
   'If an option has urgency "winning move", play it.',
   'Otherwise, if an option has urgency "forced: block or lose", play it.',
   'Then prefer a decisive attack or a double threat of your own, then an urgent defense.',
-  'An open four or a double threat wins; an open three must be answered. Apply this to both sides.',
+  'An open four, a four in two directions at once, or a double threat wins; an open three must be answered. Apply this to both sides.',
   'With nothing urgent, build your own open shapes near your stones and the centre while limiting the opponent.',
 ];
 
@@ -57,6 +61,9 @@ export interface GomokuEvent {
   stone: Stone;
 }
 
+/** Not a cell: what `undo` hands the waiting turn so the loop starts it over. */
+const REDO = -1;
+
 export interface GomokuResult {
   winner: 0 | 1 | null;
   /** True when the match was stopped rather than decided. */
@@ -65,9 +72,13 @@ export interface GomokuResult {
   elapsedMs: number;
 }
 
-export function buildGomokuRequest(board: GomokuBoard, stone: Stone, list: Candidate[], moveNumber: number, lastMove: string | null): DecisionRequest {
-  // By board position, not by score: the order must not hand the model the bot's ranking.
-  const options = [...list].sort((a, b) => a.index - b.index).map((c) => ({ id: c.id, description: describeCandidate(c) }));
+export function buildGomokuRequest(board: GomokuBoard, stone: Stone, list: Candidate[], moveNumber: number, history: number[]): DecisionRequest {
+  // By board position, not by score: the order must not hand anyone the bot's ranking. Words and
+  // data are built from the same order, so a generated algorithm cannot read it either.
+  const byIndex = [...list].sort((a, b) => a.index - b.index);
+  const options = byIndex.map((c) => ({ id: c.id, description: describeCandidate(c) }));
+  const moves = history.map(cellId);
+  const lastMove = moves.length ? moves[moves.length - 1] : null;
   return {
     game: 'gomoku',
     rules: GOMOKU_RULES,
@@ -89,14 +100,20 @@ export function buildGomokuRequest(board: GomokuBoard, stone: Stone, list: Candi
         you: stone === BLACK ? 'X' : 'O',
         opponent: stone === BLACK ? 'O' : 'X',
         moveNumber,
+        lastMove,
+        moveHistory: moves,
       },
-      options: list.map((c) => ({
+      options: byIndex.map((c) => ({
         id: c.id,
         facts: {
           row: Math.floor(c.index / 15),
           col: c.index % 15,
           makes: c.attack.best,
           blocks: c.defense.best,
+          winsNow: c.attack.best === 'five',
+          opponentWinsHereNext: c.defense.best === 'five',
+          forcing: isForcing(c.attack.best),
+          createsDoubleThreat: c.attack.threats >= 2,
           attackScore: c.attack.score,
           defenseScore: c.defense.score,
           attackThreats: c.attack.threats,
@@ -105,7 +122,7 @@ export function buildGomokuRequest(board: GomokuBoard, stone: Stone, list: Candi
         },
       })),
     },
-    botChoice: () => botMove(list).id,
+    botChoice: () => bestMove(board, stone, list).id,
     realtime: false,
   };
 }
@@ -157,6 +174,11 @@ export class GomokuMatch {
     return this.status === 'running' && this.pendingClick !== null;
   }
 
+  /** True when a person is to move and there is a move of their own to take back. */
+  get canUndo(): boolean {
+    return this.awaitingHuman && this.history.some((_, k) => this.seats[k % 2].human);
+  }
+
   start(): void {
     if (this.status !== 'idle') return;
     this.status = 'running';
@@ -178,11 +200,59 @@ export class GomokuMatch {
     resolve(index);
   }
 
+  /**
+   * Takes back the last move and any model or bot moves that followed it, so the person who is to
+   * move plays their own stone again rather than the machine's.
+   */
+  undo(): void {
+    if (!this.canUndo) return;
+    do {
+      const index = this.history.pop()!;
+      const seat = this.seats[this.history.length % 2];
+      this.board[index] = EMPTY;
+      seat.moves -= 1;
+      seat.move = t('g.undone');
+      this.turn = seat.index;
+    } while (this.history.length > 0 && !this.seats[this.turn].human);
+    this.winLine = null;
+    const resume = this.pendingClick!;
+    this.pendingClick = null;
+    resume(REDO);
+  }
+
   private waitForClick(): Promise<number | null> {
     const signal = this.abort.signal;
     return new Promise((resolve) => {
-      this.pendingClick = resolve;
-      signal.addEventListener('abort', () => resolve(null), { once: true });
+      // Dropped as soon as the click lands, so a long game does not pile listeners on one signal.
+      const onAbort = () => resolve(null);
+      this.pendingClick = (index) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(index);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * One model turn, given up on after `moveLimitMs` so a stuck call cannot stall a turn-based
+   * match. The late answer is aborted and dropped; the classic bot plays instead.
+   */
+  private askSeat(seat: GomokuSeat, request: DecisionRequest, signal: AbortSignal): Promise<Decision | 'timeout'> {
+    const limit = this.options.moveLimitMs;
+    if (limit <= 0) return seat.player.decide(request, signal);
+    const turn = new AbortController();
+    const relay = () => turn.abort();
+    signal.addEventListener('abort', relay, { once: true });
+    let timer: ReturnType<typeof setTimeout>;
+    const late = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => {
+        resolve('timeout');
+        turn.abort();
+      }, limit);
+    });
+    return Promise.race([seat.player.decide(request, turn.signal), late]).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', relay);
     });
   }
 
@@ -191,43 +261,57 @@ export class GomokuMatch {
     while (!signal.aborted) {
       const seat = this.seats[this.turn];
       const turnStarted = performance.now();
-      const lastMove = this.history.length ? cellId(this.history[this.history.length - 1]) : null;
       let index: number | null = null;
 
       if (seat.human) {
         seat.move = t('g.yourTurn');
         this.onChange();
         index = await this.waitForClick();
-        if (index === null) return;
+        if (index === null || signal.aborted) return;
+        // A move was taken back under us: the board changed, so start the turn again.
+        if (index === REDO) continue;
         seat.move = t('g.played', { cell: cellId(index), took: '' });
       } else {
         const list = candidates(this.board, seat.stone, this.options.candidateLimit);
-        const request = buildGomokuRequest(this.board, seat.stone, list, this.history.length + 1, lastMove);
-        seat.thinking = true;
-        this.onChange();
-        let decision: Decision | null = null;
-        try {
-          decision = await seat.player.decide(request, signal);
-        } catch (err) {
-          if (signal.aborted) return;
-          const e = err as Error & { status?: number };
-          seat.stats.errors += 1;
-          if (e.status === 401 || e.status === 403 || e.status === 404 || e.status === 503) this.error = `${seat.player.name}: ${e.message}`;
-          seat.move = t('m.error', { msg: e.message });
-        }
-        seat.thinking = false;
-        if (signal.aborted) return;
-        if (decision) recordDecision(seat.stats, decision);
-        const chosen = decision?.optionId ? parseCellId(decision.optionId) : null;
-        if (chosen !== null && !this.board[chosen] && list.some((c) => c.index === chosen)) {
-          index = chosen;
-          const took = decision!.latencyMs > 0 ? t('m.took', { ms: Math.round(decision!.latencyMs) }) : '';
-          seat.move = t('g.played', { cell: cellId(index), took });
+        const request = buildGomokuRequest(this.board, seat.stone, list, this.history.length + 1, this.history);
+        if (list.length === 1) {
+          // Nothing to choose: no reason to spend a model call on it.
+          index = list[0].index;
+          seat.move = t('g.played', { cell: cellId(index), took: '' });
         } else {
-          // A turn cannot be skipped, so an error or an invalid answer falls back to the classic bot.
-          if (decision) seat.stats.invalid += 1;
-          index = parseCellId(request.botChoice())!;
-          seat.move = t('g.fallback', { note: decision ? decision.note : seat.move, cell: cellId(index) });
+          seat.thinking = true;
+          this.onChange();
+          let decision: Decision | null = null;
+          let missed = false;
+          try {
+            const answer = await this.askSeat(seat, request, signal);
+            if (answer === 'timeout') missed = true;
+            else decision = answer;
+          } catch (err) {
+            if (signal.aborted) return;
+            const e = err as Error & { status?: number };
+            seat.stats.errors += 1;
+            if (e.status === 401 || e.status === 403 || e.status === 404 || e.status === 503) this.error = `${seat.player.name}: ${e.message}`;
+            seat.move = t('m.error', { msg: e.message });
+          }
+          seat.thinking = false;
+          if (signal.aborted) return;
+          if (missed) {
+            seat.stats.missed += 1;
+            seat.move = t('g.timeout', { s: Math.round(this.options.moveLimitMs / 1000) });
+          }
+          if (decision) recordDecision(seat.stats, decision);
+          const chosen = decision?.optionId ? parseCellId(decision.optionId) : null;
+          if (chosen !== null && !this.board[chosen] && list.some((c) => c.index === chosen)) {
+            index = chosen;
+            const took = decision!.latencyMs > 0 ? t('m.took', { ms: Math.round(decision!.latencyMs) }) : '';
+            seat.move = t('g.played', { cell: cellId(index), took });
+          } else {
+            // A turn cannot be skipped, so an error or an invalid answer falls back to the classic bot.
+            if (decision) seat.stats.invalid += 1;
+            index = parseCellId(request.botChoice())!;
+            seat.move = t('g.fallback', { note: decision ? decision.note : seat.move, cell: cellId(index) });
+          }
         }
         // Always a real timer, even at zero, so two instant players never starve the page.
         await sleep(Math.max(0, this.options.minMoveMs - (performance.now() - turnStarted)));

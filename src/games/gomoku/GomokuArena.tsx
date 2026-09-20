@@ -135,10 +135,36 @@ function Board({ match }: { match: GomokuMatch }) {
   );
 }
 
-function seatRows(seat: GomokuSeat): StatRow[] {
+function seatRows(seat: GomokuSeat, timed: boolean): StatRow[] {
   if (seat.human) return [[t('stat.stones'), seat.moves]];
-  // Turn-based: there is no deadline to miss, and an invalid answer shows up as a fallback.
-  return [[t('stat.stones'), seat.moves], [t('stat.calls'), seat.stats.calls], [t('stat.fallbacks'), seat.stats.invalid + seat.stats.errors], ...modelStatRows(seat.stats, false)];
+  // Turn-based: an invalid answer shows up as a fallback, and a deadline only exists if one was set.
+  const missed: StatRow[] = timed ? [[t('stat.missed'), seat.stats.missed]] : [];
+  return [[t('stat.stones'), seat.moves], [t('stat.calls'), seat.stats.calls], [t('stat.fallbacks'), seat.stats.invalid + seat.stats.errors], ...missed, ...modelStatRows(seat.stats, false)];
+}
+
+/** The moves so far, newest last, so a person can read the game back. */
+function MoveList({ match, onUndo }: { match: GomokuMatch; onUndo: (() => void) | null }) {
+  return (
+    <div className="flex w-full flex-col gap-2" style={{ maxWidth: 640 }}>
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold uppercase tracking-wide opacity-60">{t('gomoku.moves')}</span>
+        {onUndo && (
+          <button className="btn bg-white !px-3 !py-1 text-xs" disabled={!match.canUndo} onClick={onUndo}>
+            ↩ {t('gomoku.undo')}
+          </button>
+        )}
+      </div>
+      <ol className="toy-sm flex max-h-20 flex-wrap gap-x-3 gap-y-0.5 overflow-y-auto px-3 py-2 font-mono text-xs">
+        {match.history.length === 0 && <li className="opacity-50">{t('gomoku.noMoves')}</li>}
+        {match.history.map((index, i) => (
+          <li key={i}>
+            <span className="opacity-50">{i + 1}.</span> {i % 2 === 0 ? '⚫' : '⚪'}
+            {cellId(index)}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 function SeatPanel({ seat, match }: { seat: GomokuSeat; match: GomokuMatch }) {
@@ -157,7 +183,7 @@ function SeatPanel({ seat, match }: { seat: GomokuSeat; match: GomokuMatch }) {
           </span>
         }
       />
-      <StatsGrid rows={seatRows(seat)} cols={2} />
+      <StatsGrid rows={seatRows(seat, match.options.moveLimitMs > 0)} cols={2} />
     </section>
   );
 }
@@ -193,13 +219,17 @@ export function GomokuArena({
   const [, setClock] = useState(0);
   const [resultOpen, setResultOpen] = useState(true);
 
+  // Only while a clock is actually running: a finished match must not re-render twice a second.
+  const running = match !== null && match.status !== 'done';
   useEffect(() => {
+    if (!running) return;
     const id = setInterval(() => setClock((c) => c + 1), 500);
     return () => clearInterval(id);
-  }, []);
+  }, [running]);
 
   if (!match) return null;
   const [A, B] = match.seats;
+  const anyHuman = seats.some((s) => s.kind === 'human');
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-5 px-4 pb-10">
@@ -227,7 +257,10 @@ export function GomokuArena({
 
       <div className="flex w-full flex-col items-center gap-5 lg:flex-row lg:items-start lg:justify-center">
         <SeatPanel seat={A} match={match} />
-        <Board match={match} />
+        <div className="flex w-full flex-col items-center gap-3" style={{ maxWidth: 640 }}>
+          <Board match={match} />
+          <MoveList match={match} onUndo={anyHuman ? () => match.undo() : null} />
+        </div>
         <SeatPanel seat={B} match={match} />
       </div>
 
