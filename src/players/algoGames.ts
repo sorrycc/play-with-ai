@@ -131,7 +131,7 @@ function xiangqiSamples(): AlgoInput[] {
     const legal = xiangqi.legalMoves(state);
     if (xiangqi.outcome(state, legal)) break;
     if ([0, 7, 16, 24].includes(ply)) out.push(buildXiangqiRequest(state, xiangqi.analyze(state, legal), []).data);
-    state = xiangqi.makeMove(state, ply % 4 === 3 ? legal[Math.floor(random() * legal.length)] : xiangqi.botMove(state, 1, random));
+    state = xiangqi.makeMove(state, ply % 4 === 3 ? legal[Math.floor(random() * legal.length)] : xiangqi.botMove(state, { maxDepth: 1, random }));
   }
   return out;
 }
@@ -182,7 +182,7 @@ export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
     state:
       'board: 10 strings of 9 chars, Black back rank first: K general, A advisor, B elephant, N horse, R chariot, C cannon, P soldier; upper case Red, lower case Black, "." empty. youAre: "red" or "black". moveNumber. inCheck. materialBalance: in soldiers, positive when you are ahead.',
     facts:
-      'notation (traditional, e.g. "炮二平五"), piece ("general" "advisor" "elephant" "horse" "chariot" "cannon" "soldier"), from, to (files a-i, ranks 0-9 from Red\'s side, e.g. "h2"). captures: piece name or null; captureValue (chariot 9, cannon 4.5, horse 4, advisor 2, elephant 2, soldier 1). givesCheck: boolean. winsTheGame: true when the opponent has no legal reply. opponentCanWinNext: material the opponent can win with its best single capture in reply (0 means nothing hangs); a one-move look, not a search. evalAfter: static evaluation after the move in soldiers from your point of view; it does not see the opponent reply.',
+      'Every number is in soldiers: chariot 9, cannon 4.5, horse 4, advisor 2, elephant 2, soldier 1, or 2 once it has crossed the river. notation (traditional, e.g. "炮二平五"), piece ("general" "advisor" "elephant" "horse" "chariot" "cannon" "soldier"), from, to (files a-i, ranks 0-9 from Red\'s side, e.g. "h2"). captures: piece name or null; captureValue. givesCheck: boolean. winsTheGame: true when the opponent has no legal reply. opponentCanWinNext: what the opponent wins with its best capture in reply, playing the exchange on that point out to the end, with only legal recaptures counted (0 means nothing hangs); it sees that one point, not the rest of the board. escapesThreat: what the moved piece was losing where it stood, when the move takes it out of danger, 0 otherwise. threatensNext: what the moved piece threatens to win on the move after this one. attackersOfTarget, defendersOfTarget: how many enemy pieces can take it where it lands, and how many of yours hold that point. repeatsPosition: how often the position after the move has come up before, so 2 means this move draws by repetition. pliesSinceCapture: plies without a capture after this move; 120 of them is a draw. evalAfter: static evaluation after the move in soldiers from your point of view; it does not see the opponent reply.',
     samples: xiangqiSamples,
   },
 };

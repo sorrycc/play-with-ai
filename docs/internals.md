@@ -42,7 +42,10 @@ and counts only legal recaptures, so a pinned defender does not make a piece loo
 that queens is worth what it becomes; it is one square deep, not a search, so it catches hanging
 pieces and bad trades, not deeper tactics.
 Both move generators are verified by perft against the published counts (`tests/chess.test.ts`,
-`tests/xiangqi.test.ts`). Xiangqi offers its moves the same way.
+`tests/xiangqi.test.ts`). Xiangqi offers its moves the same way, and plays the exchange on the
+point out to the end with only legal recaptures counted, so a pinned defender does not make a piece
+look safe; it also says what a move saves, what it threatens next, and whether it repeats a
+position.
 
 ## How a model is asked
 

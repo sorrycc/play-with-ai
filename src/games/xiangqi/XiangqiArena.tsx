@@ -6,7 +6,7 @@ import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { createPlayer } from '../../players';
 import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
-import { COLS, PIECE_CHAR, ROWS, SQUARES, type Piece, colOf, colorOf, generalSquare, inCheck, materialBalance, moveId, rowOf, squareName } from './engine';
+import { COLS, PIECE_CHAR, ROWS, SQUARES, type Piece, colOf, colorOf, fromFen, generalSquare, inCheck, materialBalance, moveId, rowOf, squareName, toFen } from './engine';
 import { XiangqiMatch, type PlayedMove, type XiangqiOptions, type XiangqiSeat } from './match';
 
 const STEP = 60;
@@ -103,18 +103,22 @@ function MoveArrow({ move, flipped }: { move: PlayedMove; flipped: boolean }) {
   );
 }
 
-function Board({ match, flipped }: { match: XiangqiMatch; flipped: boolean }) {
+function Board({ match, flipped, review }: { match: XiangqiMatch; flipped: boolean; review: number | null }) {
   const [selected, setSelected] = useState<number | null>(null);
-  const { state, legal } = match;
-  const canMove = match.awaitingHuman;
-  const last = match.history[match.history.length - 1];
-  const ply = match.history.length;
+  const live = review === null;
+  // While a move from the game is being looked at, the board shows that position and takes no clicks.
+  const shown = useMemo(() => (review === null ? match.state : fromFen(match.history[review].fen)), [match.state, match.history, review]);
+  const state = live ? match.state : shown;
+  const legal = live ? match.legal : [];
+  const canMove = live && match.awaitingHuman;
+  const last = live ? match.history[match.history.length - 1] : match.history[review];
+  const ply = live ? match.history.length : review + 1;
   const checked = match.status !== 'idle' && inCheck(state.board, state.turn) ? generalSquare(state.board, state.turn) : -1;
 
-  // A selection made on one turn means nothing on the next.
-  const seenPly = useRef(ply);
-  if (seenPly.current !== ply) {
-    seenPly.current = ply;
+  // A selection means nothing once the turn is over, or once the person may no longer move.
+  const seen = useRef(`${ply}${canMove}`);
+  if (seen.current !== `${ply}${canMove}`) {
+    seen.current = `${ply}${canMove}`;
     if (selected !== null) setSelected(null);
   }
 
@@ -124,7 +128,8 @@ function Board({ match, flipped }: { match: XiangqiMatch; flipped: boolean }) {
     if (!canMove) return;
     if (selected !== null && targets.has(sq)) return match.play(moveId(legal.find((m) => m.from === selected && m.to === sq)!));
     const piece = state.board[sq];
-    setSelected(piece && colorOf(piece) === state.turn && legal.some((m) => m.from === sq) ? sq : null);
+    // Clicking the selected piece again puts it down.
+    setSelected(sq !== selected && piece && colorOf(piece) === state.turn && legal.some((m) => m.from === sq) ? sq : null);
   };
 
   const river = MARGIN + STEP * 4.5;
@@ -200,7 +205,7 @@ function Board({ match, flipped }: { match: XiangqiMatch; flipped: boolean }) {
 
 const sideName = (color: 'r' | 'b') => t(color === 'r' ? 'x.red' : 'x.black');
 
-/** "Last move: Red 炮 h2 → e2 takes 马 · 炮二平五", so the opponent's move is never a mystery. */
+/** "Last move: Red 炮 h2 → e2 takes 马 · 炮二平五 将军", so the opponent's move is never a mystery. */
 function LastMove({ move }: { move: PlayedMove | undefined }) {
   if (!move) return null;
   const chip = (piece: Piece) => (
@@ -224,6 +229,7 @@ function LastMove({ move }: { move: PlayedMove | undefined }) {
       <span className="rounded-full border-2 border-ink bg-paper px-2.5 text-sm" style={{ fontFamily: PIECE_FONT }}>
         {move.notation}
       </span>
+      {move.check && <span className="rounded-full border-2 border-ink bg-pink px-2.5 text-sm font-bold text-white">{t(move.mate ? 'x.mate' : 'x.check')}</span>}
     </div>
   );
 }
@@ -232,6 +238,7 @@ function seatRows(seat: XiangqiSeat, lead: number): StatRow[] {
   const base: StatRow[] = [
     [t('stat.moves'), seat.moves],
     [t('stat.material'), lead > 0 ? `+${lead}` : lead === 0 ? '=' : String(lead)],
+    [t('x.clock'), formatClock(seat.clockMs)],
   ];
   if (seat.human) return base;
   return [...base, [t('stat.calls'), seat.stats.calls], [t('stat.fallbacks'), seat.stats.invalid + seat.stats.errors], ...modelStatRows(seat.stats, false)];
@@ -270,7 +277,8 @@ function SeatPanel({ seat, match }: { seat: XiangqiSeat; match: XiangqiMatch }) 
   );
 }
 
-function MoveList({ match }: { match: XiangqiMatch }) {
+/** The record, in notation. A move is a button: click it to put that position back on the board. */
+function MoveList({ match, review, onReview }: { match: XiangqiMatch; review: number | null; onReview: (ply: number | null) => void }) {
   const end = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     end.current?.scrollIntoView({ block: 'nearest', inline: 'end' });
@@ -278,12 +286,17 @@ function MoveList({ match }: { match: XiangqiMatch }) {
   if (match.history.length === 0) return null;
   return (
     <div className="toy-sm w-full overflow-x-auto whitespace-nowrap px-3 py-1.5 text-sm" style={{ maxWidth: 560 }}>
-      {match.history.map((m, i) => (
-        <span key={i} className={i === match.history.length - 1 ? 'font-bold' : 'opacity-70'} style={{ color: m.color === 'r' ? RED : INK }}>
-          {i % 2 === 0 && <span className="font-mono text-ink opacity-50">{i / 2 + 1}. </span>}
-          {m.notation}{' '}
-        </span>
-      ))}
+      {match.history.map((m, i) => {
+        const here = review === null ? i === match.history.length - 1 : i === review;
+        return (
+          <span key={i} style={{ color: m.color === 'r' ? RED : INK }}>
+            {i % 2 === 0 && <span className="font-mono text-ink opacity-50">{i / 2 + 1}. </span>}
+            <button className={`rounded px-0.5 hover:bg-ink/10 ${here ? 'font-bold' : 'opacity-70'} ${i === review ? 'bg-mint/60' : ''}`} onClick={() => onReview(i === review ? null : i)}>
+              {m.notation}
+            </button>{' '}
+          </span>
+        );
+      })}
       <span ref={end} />
     </div>
   );
@@ -300,6 +313,7 @@ function compareRows(match: XiangqiMatch): CompareRow[] {
       const lead = balance * (s.color === 'r' ? 1 : -1);
       return lead > 0 ? `+${lead}` : lead === 0 ? '=' : String(lead);
     }),
+    both(t('x.clock'), (s) => formatClock(s.clockMs)),
     both(t('stat.avgLatency'), (s) => (s.stats.latency ? fmtMs(s.stats.latency / s.stats.calls) : '–')),
     both(t('cmp.botFallbacks'), (s) => (s.human ? '–' : s.stats.invalid + s.stats.errors)),
     both(t('cmp.tokensInOut'), (s) => (s.stats.inputTokens ? `${s.stats.inputTokens.toLocaleString()} / ${s.stats.outputTokens.toLocaleString()}` : '–')),
@@ -332,17 +346,34 @@ export function XiangqiArena({
   );
   const [, setClock] = useState(0);
   const [resultOpen, setResultOpen] = useState(true);
+  // A person playing Black alone starts with the board their way round; the button turns it.
+  const [flipped, setFlipped] = useState(seats[1].kind === 'human' && seats[0].kind !== 'human');
+  const [review, setReview] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setClock((c) => c + 1), 500);
     return () => clearInterval(id);
   }, []);
 
+  // A move played while an earlier position is on the board puts the live one back: play comes first.
+  const ply = match?.history.length ?? 0;
+  const running = match?.status === 'running';
+  useEffect(() => {
+    if (running) setReview(null);
+  }, [ply, running]);
+
   if (!match) return null;
   const [A, B] = match.seats;
-  // A person playing Black alone sees the board from Black's side.
-  const flipped = seats[1].kind === 'human' && seats[0].kind !== 'human';
   const fullMove = Math.floor(match.history.length / 2) + (match.status === 'done' ? 0 : 1);
+
+  const copyRecord = () => {
+    const pairs = match.history.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ${m.notation}` : m.notation));
+    void navigator.clipboard?.writeText(`${toFen(match.state)}\n${pairs.join(' ')}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-5 px-4 pb-10">
@@ -354,6 +385,14 @@ export function XiangqiArena({
           {options.maxMoves > 0 && <span className="opacity-50"> / {options.maxMoves}</span>}
         </span>
         {match.status === 'running' && inCheck(match.state.board, match.state.turn) && <span className="toy-sm pop-in !bg-pink px-3 py-1 text-sm font-bold text-white">{t('c.check')}</span>}
+        <button className="btn bg-white !py-1.5 text-sm" onClick={() => setFlipped((f) => !f)} title={t('x.flip')}>
+          ⇅
+        </button>
+        {match.history.length > 0 && (
+          <button className="btn bg-white !py-1.5 text-sm" onClick={copyRecord}>
+            {copied ? t('x.copied') : t('x.copy')}
+          </button>
+        )}
         {match.status !== 'done' ? (
           <button className="btn bg-pink !py-1.5 text-sm text-white" onClick={() => match.stop()}>
             {t('arena.stop')}
@@ -374,9 +413,14 @@ export function XiangqiArena({
       <div className="flex w-full flex-col items-center gap-5 lg:flex-row lg:items-start lg:justify-center">
         <SeatPanel seat={A} match={match} />
         <div className="flex w-full min-w-0 flex-col items-center gap-3" style={{ maxWidth: 560 }}>
-          <LastMove move={match.history[match.history.length - 1]} />
-          <Board match={match} flipped={flipped} />
-          <MoveList match={match} />
+          <LastMove move={match.history[review ?? match.history.length - 1]} />
+          <Board match={match} flipped={flipped} review={review} />
+          {review !== null && (
+            <button className="btn bg-mint !py-1 text-sm" onClick={() => setReview(null)}>
+              {t('x.reviewing', { n: review + 1 })} · {t('x.live')}
+            </button>
+          )}
+          <MoveList match={match} review={review} onReview={setReview} />
         </div>
         <SeatPanel seat={B} match={match} />
       </div>

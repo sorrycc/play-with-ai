@@ -11,10 +11,12 @@ import {
   type Piece,
   type XiangqiState,
   PIECE_NAME,
-  VALUE,
+  QUIET_LIMIT,
+  SEARCH_MS,
   analyze,
   boardToText,
   botMove,
+  capturePoints,
   describeMove,
   inCheck,
   legalMoves,
@@ -26,6 +28,7 @@ import {
   squareName,
   startState,
   toChinese,
+  toFen,
   typeOf,
 } from './engine';
 
@@ -40,24 +43,25 @@ export const XIANGQI_DEFAULTS: XiangqiOptions = { maxMoves: 80, minMoveMs: 900 }
 
 /** At the move limit, a lead of at least this many points of material wins; less is a draw. */
 const ADJUDICATION_MARGIN = 3;
-/** Few enough moves that a third ply is cheap, which is when it matters: endgames and mating nets. */
-const DEEP_SEARCH_BELOW = 24;
 
 export const XIANGQI_RULES =
   'You are playing Chinese chess (xiangqi). Red (upper-case letters) starts at the bottom and moves first; Black (lower case) starts at the top. ' +
   'K general: one step orthogonally inside its palace; the two generals may never face each other on an open file. A advisor: one step diagonally inside the palace. ' +
   'B elephant: exactly two steps diagonally, blocked if the point between is occupied, and it never crosses the river. N horse: one step orthogonally then one diagonally, blocked if that first point is occupied. ' +
   'R chariot: any distance orthogonally. C cannon: moves like a chariot, but captures only by jumping over exactly one piece. P soldier: one step forward, and also sideways once across the river; never backwards. ' +
-  'A player with no legal move loses, whether or not it is in check. Every listed option is a legal move and the facts next to it were computed by code and are exact. ' +
-  'Piece values: chariot 9, cannon 4.5, horse 4, advisor 2, elephant 2, soldier 1 (2 once across the river). "opponent_can_win_next" looks one capture ahead only.';
+  'A player with no legal move loses, whether or not it is in check. The third time the same position comes up is a draw, unless one side gave check every move of it, which loses. ' +
+  'Every listed option is a legal move and the facts next to it were computed by code and are exact. ' +
+  'Every number is in soldiers: chariot 9, cannon 4.5, horse 4, advisor 2, elephant 2, soldier 1, or 2 once it has crossed the river. ' +
+  '"opponent_can_win_next", "saves" and "threatens_next" play out the exchange on that point to the end, but see no further than that one point.';
 
 export const XIANGQI_PRIORITIES = [
   'If a move says WINS THE GAME, play it.',
-  'Do not lose material: avoid a move whose opponent_can_win_next is larger than what the move captures. Moving a piece that is already under attack to safety counts as saving it.',
-  'Win material when it is free: prefer captures where opponent_can_win_next is nothing or smaller than what you take.',
+  'Do not lose material: avoid a move whose opponent_can_win_next is larger than what the move captures. A move with "saves" moves a piece that is already under attack out of danger, which is worth as much as a capture.',
+  'Win material when it is free: prefer captures where opponent_can_win_next is nothing or smaller than what you take, and moves that threaten more next turn than the opponent can win.',
   'In the opening, bring out the chariots, horses and cannons quickly; a central cannon and well-placed horses are good. Keep the advisors and elephants near the general for defence.',
   'Chariots are the strongest pieces: get them onto open files, and do not trade one for a lesser piece.',
   'When ahead in material, trade pieces and advance soldiers across the river; when the enemy general is short of defenders, look for checks.',
+  'Watch "repetition": take the draw only when you are behind, and find another move when you are ahead.',
 ];
 
 export interface XiangqiSeat {
@@ -70,6 +74,8 @@ export interface XiangqiSeat {
   moves: number;
   /** Enemy pieces this seat has taken, in order. */
   captured: Piece[];
+  /** Time this seat has spent on its own turns: its clock. */
+  clockMs: number;
   stats: PlayerStats;
 }
 
@@ -82,6 +88,12 @@ export interface PlayedMove {
   color: Color;
   piece: Piece;
   captured: Piece | null;
+  /** The move gave check, and ended the game by checkmate. */
+  check: boolean;
+  mate: boolean;
+  /** The position after the move, for the repetition rules and for stepping back through the game. */
+  key: string;
+  fen: string;
 }
 
 export interface XiangqiEvent {
@@ -97,7 +109,7 @@ export interface XiangqiResult {
   elapsedMs: number;
 }
 
-export function buildXiangqiRequest(state: XiangqiState, facts: MoveFacts[], recent: string[]): DecisionRequest {
+export function buildXiangqiRequest(state: XiangqiState, facts: MoveFacts[], recent: string[], seen?: ReadonlyMap<string, number>): DecisionRequest {
   const red = state.turn === 'r';
   // `+ 0` turns the -0 that Black gets from a level position into a plain 0.
   const balance = materialBalance(state.board) * (red ? 1 : -1) + 0;
@@ -113,6 +125,7 @@ export function buildXiangqiRequest(state: XiangqiState, facts: MoveFacts[], rec
       move_number: state.fullmove,
       you_are_in_check: inCheck(state.board, state.turn),
       material_balance: balance === 0 ? 'level' : balance > 0 ? `you are ${balance} points ahead` : `you are ${-balance} points behind`,
+      plies_since_capture: `${state.quiet} (${QUIET_LIMIT} without a capture is a draw)`,
       recent_moves: recent.length ? recent.join(' ') : 'none yet',
     },
     options: facts.map((f) => ({ id: f.id, description: describeMove(f) })),
@@ -132,15 +145,21 @@ export function buildXiangqiRequest(state: XiangqiState, facts: MoveFacts[], rec
           from: squareName(f.move.from),
           to: squareName(f.move.to),
           captures: f.move.captured ? PIECE_NAME[typeOf(f.move.captured)] : null,
-          captureValue: f.move.captured ? VALUE[typeOf(f.move.captured)] / 100 : 0,
+          captureValue: capturePoints(f.move),
           givesCheck: f.check,
           winsTheGame: f.wins,
           opponentCanWinNext: f.risk,
+          escapesThreat: f.escapes,
+          threatensNext: f.threatens,
+          attackersOfTarget: f.attackers,
+          defendersOfTarget: f.defenders,
+          repeatsPosition: f.repeats,
+          pliesSinceCapture: f.quiet,
           evalAfter: f.evalAfter,
         },
       })),
     },
-    botChoice: () => moveId(botMove(state, facts.length < DEEP_SEARCH_BELOW ? 3 : 2)),
+    botChoice: () => moveId(botMove(state, { budgetMs: SEARCH_MS, seen })),
     realtime: false,
   };
 }
@@ -177,6 +196,7 @@ export class XiangqiMatch {
       move: t(index === 0 ? 'x.redFirst' : 'x.blackWaits'),
       moves: 0,
       captured: [],
+      clockMs: 0,
       stats: freshStats(),
     });
     this.seats = [seat(0), seat(1)];
@@ -220,8 +240,13 @@ export class XiangqiMatch {
   private waitForMove(): Promise<string | null> {
     const signal = this.abort.signal;
     return new Promise((resolve) => {
-      this.pendingMove = resolve;
-      signal.addEventListener('abort', () => resolve(null), { once: true });
+      // The listener goes again as soon as the person moves, so a long game does not collect one per turn.
+      const abandon = () => resolve(null);
+      signal.addEventListener('abort', abandon, { once: true });
+      this.pendingMove = (id) => {
+        signal.removeEventListener('abort', abandon);
+        resolve(id);
+      };
     });
   }
 
@@ -232,6 +257,8 @@ export class XiangqiMatch {
       const started = performance.now();
       const legal = this.legal;
       let chosen: Move | undefined;
+      // What the seat will say once the move is on the board, not a word before it.
+      let announce: string;
 
       if (seat.human) {
         seat.move = t('c.yourTurn');
@@ -239,10 +266,11 @@ export class XiangqiMatch {
         const id = await this.waitForMove();
         if (id === null) return;
         chosen = legal.find((m) => moveId(m) === id)!;
-        seat.move = t('c.played', { san: toChinese(this.state, chosen), took: '' });
+        seat.clockMs += performance.now() - started;
+        announce = t('c.played', { san: toChinese(this.state, chosen), took: '' });
       } else {
-        const facts = analyze(this.state, legal);
-        const request = buildXiangqiRequest(this.state, facts, this.history.slice(-10).map((m) => m.notation));
+        const facts = analyze(this.state, legal, this.seen);
+        const request = buildXiangqiRequest(this.state, facts, this.history.slice(-10).map((m) => m.notation), this.seen);
         seat.thinking = true;
         this.onChange();
         // Let the "thinking" state paint before a local search blocks the thread.
@@ -264,45 +292,57 @@ export class XiangqiMatch {
         if (fact) {
           chosen = fact.move;
           const took = decision!.latencyMs > 0 ? t('m.took', { ms: Math.round(decision!.latencyMs) }) : '';
-          seat.move = t('c.played', { san: fact.notation, took });
+          announce = t('c.played', { san: fact.notation, took });
         } else {
           // A turn cannot be skipped, so an error or an invalid answer falls back to the classic bot.
           if (decision) seat.stats.invalid += 1;
           const id = request.botChoice();
           const fallback = facts.find((f) => f.id === id)!;
           chosen = fallback.move;
-          seat.move = t('c.fallback', { note: decision ? decision.note : seat.move, san: fallback.notation });
+          announce = t('c.fallback', { note: decision ? decision.note : seat.move, san: fallback.notation });
         }
+        seat.clockMs += performance.now() - started;
         // Always a real timer, even at zero, so two instant players never starve the page.
         await sleep(Math.max(0, this.options.minMoveMs - (performance.now() - started)));
         if (signal.aborted) return;
       }
 
-      if (this.apply(seat, chosen)) return;
+      if (this.apply(seat, chosen, announce)) return;
       this.onChange();
     }
   }
 
   /** Plays the move; returns true when it ended the game. */
-  private apply(seat: XiangqiSeat, move: Move): boolean {
-    this.history.push({ id: moveId(move), notation: toChinese(this.state, move), from: move.from, to: move.to, color: seat.color, piece: move.piece, captured: move.captured });
+  private apply(seat: XiangqiSeat, move: Move, announce: string): boolean {
+    const notation = toChinese(this.state, move);
+    const next = makeMove(this.state, move);
+    const legal = legalMoves(next);
+    const end = outcome(next, legal);
+    const check = inCheck(next.board, next.turn);
+    const key = positionKey(next);
+    this.history.push({ id: moveId(move), notation, from: move.from, to: move.to, color: seat.color, piece: move.piece, captured: move.captured, check, mate: end?.kind === 'checkmate', key, fen: toFen(next) });
     if (move.captured) seat.captured.push(move.captured);
     seat.moves += 1;
-    this.state = makeMove(this.state, move);
-    this.legal = legalMoves(this.state);
-    const key = positionKey(this.state);
+    seat.move = announce;
+    this.state = next;
+    this.legal = legal;
     const times = (this.seen.get(key) ?? 0) + 1;
     this.seen.set(key, times);
 
-    this.emit({ type: inCheck(this.state.board, this.state.turn) ? 'check' : move.captured ? 'capture' : 'move', color: seat.color });
+    // A capture that also checks is both, and sounds like both.
+    if (move.captured) this.emit({ type: 'capture', color: seat.color });
+    if (check) this.emit({ type: 'check', color: seat.color });
+    if (!move.captured && !check) this.emit({ type: 'move', color: seat.color });
 
-    const end = outcome(this.state, this.legal);
     const fullMoves = Math.ceil(this.history.length / 2);
     if (end && 'winner' in end) return this.finish(seat.index, t(end.kind === 'checkmate' ? 'x.r.mate' : 'x.r.stuck', { winner: seat.player.name, n: fullMoves }));
     if (end) return this.finish(null, t('x.r.quiet'));
-    // Tournament rules decide a repetition by who is forcing it (perpetual check loses). That needs
-    // judging intent, so here a position reached three times is simply a draw.
-    if (times >= 3) return this.finish(null, t('c.r.threefold'));
+    if (times >= 3) {
+      const forcing = this.perpetual(key);
+      if (forcing === null) return this.finish(null, t('c.r.threefold'));
+      const winner = forcing === 0 ? 1 : 0;
+      return this.finish(winner, t('x.r.perpetual', { winner: this.seats[winner].player.name, loser: this.seats[forcing].player.name }));
+    }
     if (this.options.maxMoves > 0 && this.history.length >= this.options.maxMoves * 2) {
       const balance = materialBalance(this.state.board);
       if (Math.abs(balance) < ADJUDICATION_MARGIN) return this.finish(null, t('c.r.limitDraw', { n: this.options.maxMoves }));
@@ -310,6 +350,25 @@ export class XiangqiMatch {
       return this.finish(winner, t('c.r.limitWin', { winner: this.seats[winner].player.name, n: this.options.maxMoves, lead: Math.abs(balance) }));
     }
     return false;
+  }
+
+  /**
+   * Tournament rules give a repetition to whoever is not forcing it, and perpetual check loses.
+   * Telling that apart in general needs a judgment of intent; the plain case does not. If one side
+   * gave check with every move of the repetition and the other did not, it is forcing, and loses.
+   * Returns the seat that loses, or null when the repetition is nobody's doing: a draw.
+   */
+  private perpetual(key: string): 0 | 1 | null {
+    const first = this.history.findIndex((m) => m.key === key);
+    if (first < 0) return null;
+    const cycle = this.history.slice(first + 1);
+    const chasing = (color: Color) => {
+      const own = cycle.filter((m) => m.color === color);
+      return own.length > 0 && own.every((m) => m.check);
+    };
+    if (chasing('r') && !chasing('b')) return 0;
+    if (chasing('b') && !chasing('r')) return 1;
+    return null;
   }
 
   private finish(winner: 0 | 1 | null, reason: string, stopped = false): true {

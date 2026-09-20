@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Decision, DecisionRequest, Player } from '../src/core/types';
 import { XiangqiMatch, buildXiangqiRequest } from '../src/games/xiangqi/match';
-import { analyze, botMove, describeMove, fromFen, inCheck, legalMoves, makeMove, moveId, outcome, perft, startState, toChinese } from '../src/games/xiangqi/engine';
+import { analyze, botMove, describeMove, fromFen, inCheck, legalMoves, makeMove, materialBalance, moveId, openingBook, outcome, perft, positionKey, startState, toChinese, toFen } from '../src/games/xiangqi/engine';
 
 const find = (s: ReturnType<typeof startState>, id: string) => {
   const m = legalMoves(s).find((x) => moveId(x) === id);
@@ -79,6 +79,58 @@ describe('xiangqi rules', () => {
     expect(toChinese(doubled, find(doubled, 'a2a1'))).toBe('后车退一');
   });
 
+  it('numbers soldiers when 前/后 cannot tell them apart', () => {
+    const notation = (s: ReturnType<typeof startState>, piece: string) =>
+      legalMoves(s).filter((m) => m.piece === piece).map((m) => toChinese(s, m));
+    // Three on a file are 前/中/后; four or five are numbered from the front instead.
+    const four = fromFen('3k5/9/9/4P4/4P4/4P4/4P4/9/9/4K4 w');
+    expect(notation(four, 'P')).toEqual(['一兵进一', '一兵平六', '一兵平四', '二兵平六', '二兵平四']);
+    // Two files with two soldiers each: 前兵 would name two different moves, so all four are numbered,
+    // from Red's own right (column 8) and front to back.
+    const twoFiles = fromFen('3k5/9/9/9/2P1P4/2P1P4/9/9/9/4K4 w');
+    expect(notation(twoFiles, 'P')).toEqual(['三兵进一', '三兵平八', '三兵平六', '一兵进一', '一兵平六', '一兵平四']);
+    const black = fromFen('4K4/9/9/9/2p1p4/2p1p4/9/9/9/3k5 b');
+    expect(notation(black, 'p')).toEqual(['1卒进1', '1卒平2', '1卒平4', '3卒进1', '3卒平4', '3卒平6']);
+  });
+
+  it('never gives two legal moves the same notation', () => {
+    const positions = [
+      startState(),
+      fromFen('3k5/9/4P4/4P4/4P4/4P4/4P4/9/9/4K4 w'), // five soldiers stacked on one file
+      fromFen('3k5/9/9/9/2P1P4/2P1P4/9/9/9/4K4 w'), // soldiers doubled on two files
+      fromFen('4K4/9/9/9/2p1p4/2p1p4/9/9/9/3k5 b'),
+      fromFen('2baka3/9/2n1b1n2/p1p1C1p1p/9/2P6/P3P1P1P/1C2B1N2/4A4/1RBAK2R1 w'),
+    ];
+    // Random play from each, so ordinary middlegames are covered as well as the awkward positions.
+    let seed = 7;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (const start of positions) {
+      let s = start;
+      for (let ply = 0; ply < 80; ply++) {
+        const legal = legalMoves(s);
+        if (legal.length === 0) break;
+        const written = legal.map((m) => toChinese(s, m));
+        expect(new Set(written).size, `${written.join(' ')} in ${toFen(s)}`).toBe(legal.length);
+        s = makeMove(s, legal[Math.floor(random() * legal.length)]);
+      }
+    }
+  }, 60_000);
+
+  it('writes the position back out as a FEN', () => {
+    expect(toFen(startState())).toBe(START);
+    const after = play(START, 'h2e2', 'h9g7');
+    expect(toFen(after)).toBe('rnbakab1r/9/1c4nc1/p1p1p1p1p/9/9/P1P1P1P1P/1C2C4/9/RNBAKABNR w');
+    expect(toFen(fromFen(toFen(after)))).toBe(toFen(after));
+  });
+
+  it('counts material by pieces alone, so only a capture moves it', () => {
+    // Both sides hold a general and four soldiers; Red's have crossed the river, which is position,
+    // not material, and must not hand Red a win when the move limit adjudicates.
+    const same = fromFen('4k4/9/9/p1p1p1p2/P1P1P1P2/9/9/9/9/4K4 w');
+    expect(materialBalance(same.board)).toBe(0);
+    expect(materialBalance(fromFen('3k5/9/9/9/9/9/9/9/9/3KR4 w').board)).toBe(9);
+  });
+
   it('flags a move that hangs a piece, and the bot takes a free one', () => {
     // Sliding the chariot to c4 puts it right in front of a black soldier.
     const s = fromFen('3k5/9/9/9/2p6/R8/9/9/9/4K4 w');
@@ -88,10 +140,82 @@ describe('xiangqi rules', () => {
     expect(analyze(s).find((f) => f.id === 'a4b4')!.risk).toBe(0);
     // The general sits behind an advisor, so no check competes with simply taking the chariot.
     const free = fromFen('4k4/4a4/9/9/r8/9/9/9/R8/3K5 w');
-    expect(moveId(botMove(free, 2))).toBe('a1a5');
+    expect(moveId(botMove(free, { budgetMs: 100 }))).toBe('a1a5');
     const fields = Object.keys(describeMove(analyze(s)[0]));
     for (const f of analyze(s)) expect(Object.keys(describeMove(f))).toEqual(fields);
   });
+
+  it('only counts a recapture that is legal, so a pinned defender does not make a piece safe', () => {
+    // Black's chariot on d3 pins the one on d1 to the file in front of the general, so taking the
+    // horse on e1 back with it would expose Kd0: the horse is free, and the facts have to say so.
+    const s = fromFen('4rk3/9/9/9/9/9/3r5/9/3RN3P/3K5 w');
+    const wait = analyze(s).find((f) => f.id === 'i1i2')!;
+    expect(wait.risk).toBe(4);
+    expect(describeMove(wait).opponent_can_win_next).toBe('4 points with 车5进8');
+    // Defended by a piece that really can take back: the exchange is even, so nothing is won.
+    const held = fromFen('4rk3/9/9/9/9/9/9/9/3RN3P/3K5 w');
+    expect(analyze(held).find((f) => f.id === 'i1i2')!.risk).toBe(0);
+  });
+
+  it('says what a move saves and what it threatens', () => {
+    // The chariot on c4 stands right in front of a soldier that can take it.
+    const s = fromFen('3k5/9/9/9/2p6/2R6/9/9/9/4K4 w');
+    const away = analyze(s).find((f) => f.id === 'c4i4')!;
+    expect(away.escapes).toBe(9);
+    expect(away.risk).toBe(0);
+    expect(describeMove(away).saves).toBe('9 points: this piece was under attack where it stood');
+    // Backing off down the file saves the chariot and keeps the soldier under attack.
+    const back = analyze(s).find((f) => f.id === 'c4c1')!;
+    expect(back.threatens).toBe(1);
+    expect(describeMove(back).threatens_next).toBe('1 points with this piece on the move after');
+    // A move that leaves the chariot where it is has nothing to save.
+    const other = analyze(s).find((f) => f.move.piece === 'K')!;
+    expect(other.escapes).toBe(0);
+    expect(other.risk).toBe(9);
+  });
+
+  it('counts how often a position has been seen, and how long since a capture', () => {
+    const s = startState();
+    const seen = new Map([[positionKey(makeMove(s, find(s, 'b0c2'))), 2]]);
+    const facts = analyze(s, legalMoves(s), seen);
+    expect(facts.find((f) => f.id === 'b0c2')!.repeats).toBe(2);
+    expect(describeMove(facts.find((f) => f.id === 'b0c2')!).repetition).toBe('DRAW: this position for the third time');
+    expect(facts.find((f) => f.id === 'h2e2')!.repeats).toBe(0);
+    expect(facts.find((f) => f.id === 'h2e2')!.quiet).toBe(1);
+  });
+
+  it('opens from a book of real openings, and searches under its time budget', () => {
+    const start = openingBook().get(positionKey(startState()))!;
+    expect(start).toContain('h2e2'); // 炮二平五
+    expect(start.length).toBeGreaterThan(1); // two bots do not open the same way every game
+    const opened = new Set(Array.from({ length: 12 }, (_, i) => moveId(botMove(startState(), { random: () => i / 12 }))));
+    expect(opened.size).toBeGreaterThan(1);
+    for (const id of opened) expect(start).toContain(id);
+
+    // Off the book the search deepens until the budget runs out, and not far past it.
+    const middle = fromFen('r1bakabr1/9/1cn3nc1/p1p1p1p1p/9/9/P1P1P1P1P/1CN3NC1/9/R1BAKABR1 w');
+    const started = performance.now();
+    const move = botMove(middle, { budgetMs: 200 });
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(legalMoves(middle).map(moveId)).toContain(moveId(move));
+  }, 20_000);
+
+  it('sees a mate in one, and knows what a repetition is worth', () => {
+    const mate = fromFen('3aka3/4R4/9/9/9/9/9/9/9/4K4 w');
+    expect(analyze(mate).filter((f) => f.wins).map((f) => f.id)).toEqual(['e8e9']);
+    expect(moveId(botMove(mate, { budgetMs: 300, random: () => 0 }))).toBe('e8e9');
+
+    // Red is a chariot behind with two moves to choose from: stepping into the position for the
+    // third time is a draw, and a draw is the best Red has.
+    const behind = fromFen('5k3/9/9/9/r8/9/9/9/9/4K4 w');
+    const repeat = positionKey(makeMove(behind, find(behind, 'e0d0')));
+    expect(moveId(botMove(behind, { budgetMs: 300, random: () => 0 }))).toBe('e0e1');
+    expect(moveId(botMove(behind, { budgetMs: 300, seen: new Map([[repeat, 2]]), random: () => 0 }))).toBe('e0d0');
+    // With the material the other way round, the same draw throws a win away, so it is not played.
+    const ahead = fromFen('5k3/9/9/9/9/9/9/9/R8/4K4 w');
+    const same = positionKey(makeMove(ahead, find(ahead, 'a1a2')));
+    expect(moveId(botMove(ahead, { budgetMs: 300, seen: new Map([[same, 2]]), random: () => 0 }))).not.toBe('a1a2');
+  }, 20_000);
 });
 
 describe('xiangqi match', () => {
@@ -124,6 +248,51 @@ describe('xiangqi match', () => {
     expect(match.result?.winner).toBe(0);
     expect(match.seats[0].captured.length).toBeGreaterThan(0);
   }, 240_000);
+
+  it('gives every option the same facts, on one scale', () => {
+    // A black soldier that has crossed the river is worth 2, in the words and in the data alike.
+    const s = fromFen('3k5/9/9/9/9/9/4p4/9/4R4/4K4 w');
+    const req = buildXiangqiRequest(s, analyze(s), []);
+    const take = req.options.find((o) => o.id === 'e1e3')!;
+    expect(take.description.captures).toBe('a soldier (2 points)');
+    expect((req.data.options.find((o) => o.id === 'e1e3')!.facts as { captureValue: number }).captureValue).toBe(2);
+    const fields = Object.keys(req.data.options[0].facts);
+    for (const o of req.data.options) expect(Object.keys(o.facts)).toEqual(fields);
+  });
+
+  it('a seat says what it played only once the piece is on the board', async () => {
+    const bot = scripted('bot', (req) => req.botChoice());
+    const match = new XiangqiMatch([bot, bot], { maxMoves: 2, minMoveMs: 500 });
+    const samples: string[] = [];
+    const watch = setInterval(() => samples.push(`${match.history.length}|${match.seats[0].move}`), 10);
+    match.start();
+    await expect.poll(() => match.history.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    clearInterval(watch);
+    match.stop();
+    const played = match.history[0].notation;
+    expect(samples.some((s) => s.startsWith('0|'))).toBe(true); // the seat was watched while it thought
+    expect(samples.filter((s) => s.startsWith('0|') && s.includes(played))).toEqual([]);
+    expect(match.seats[0].move).toContain(played);
+    expect(match.seats[0].clockMs).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('a side that gives check on every move of a repetition loses', async () => {
+    // Red's chariot checks down one file, Black's general steps to the next one and back. After the
+    // third time the position comes up, Red is plainly the one forcing it: 长将, and Red loses.
+    const red = ['d5e5', 'e5f5', 'f5e5', 'e5f5', 'f5e5'];
+    const black = ['e9f9', 'f9e9', 'e9f9', 'f9e9'];
+    let i = 0;
+    let j = 0;
+    const chase = scripted('chaser', (req) => ((req.state.you_are as string).startsWith('Red') ? (red[i++] ?? req.botChoice()) : (black[j++] ?? req.botChoice())));
+    const match = new XiangqiMatch([chase, chase], { maxMoves: 0, minMoveMs: 0 });
+    match.state = fromFen('4k4/9/9/9/3R5/9/9/9/9/3K5 w');
+    match.legal = legalMoves(match.state);
+    match.start();
+    await expect.poll(() => match.status, { timeout: 20_000 }).toBe('done');
+    expect(match.history.map((m) => m.id)).toEqual(['d5e5', 'e9f9', 'e5f5', 'f9e9', 'f5e5', 'e9f9', 'e5f5', 'f9e9', 'f5e5']);
+    expect(match.result?.winner).toBe(1); // Black wins: Red was the one giving check every move
+    expect(match.result?.reason).toMatch(/长将|perpetual/);
+  }, 30_000);
 
   it('an invalid answer falls back to the bot, and a person can only play legal moves', async () => {
     const human: Player = { ...scripted('you', () => null), config: { kind: 'human' } };
