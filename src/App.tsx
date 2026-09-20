@@ -164,7 +164,7 @@ export function App() {
         </div>
       )}
       {screen.name === 'lobby' && <Lobby onPick={(game) => setScreen({ name: 'setup', game })} onSettings={() => setScreen({ name: 'settings' })} />}
-      {screen.name === 'settings' && <SettingsPage onBack={lobby} />}
+      {screen.name === 'settings' && <SettingsPage api={api} onBack={lobby} />}
       {screen.name === 'setup' &&
         (screen.game === 'code' ? (
           <CodeSetup initial={setup} api={api} onStart={(next) => start('code', next)} onBack={lobby} />

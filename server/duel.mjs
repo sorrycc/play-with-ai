@@ -19,6 +19,7 @@
 //   POST /api/duel/test    save the person's files and run the repo's own tests
 //   POST /api/duel/submit  save, stop the person's clock, run the hidden test
 //   POST /api/duel/stop    end the run and kill the agent
+//   POST /api/duel/check   Settings asks whether an agent works: its version, or one real run
 //
 // A side's time runs until it says "done": the person presses Submit, the agent's process exits.
 // Verifying is off that side's own clock, limit included, so a failed verdict hands the person the
@@ -31,7 +32,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { constants, existsSync, rmSync } from 'node:fs';
-import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +59,10 @@ const KEEP_RUNS = 5;
  */
 const HEARTBEAT_MS = 90_000;
 const WATCHDOG_MS = 5_000;
+const CHECK_VERSION_TIMEOUT_MS = 15_000;
+const CHECK_RUN_TIMEOUT_MS = 120_000;
+/** Needs no file and no tool, so what it proves is the login and the model, not the agent's skill. */
+const CHECK_PROMPT = 'This is a connection check. Reply with the single word OK and do nothing else.';
 const LIMITS_SEC = [120, 180, 300, 600];
 const HEAD_STARTS_SEC = [0, 15, 30, 60];
 /** The "no agent" seat: the same card and clock, nobody on the other side. */
@@ -767,6 +772,38 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
       const match = runs.get(body.id);
       if (match) settle(match, { winner: null, reason: 'stopped' });
       return { ok: true };
+    },
+
+    /**
+     * Whether an agent works, never as an error: `{ ok, ms, detail }`. Without `deep` it is found on
+     * the PATH and asked for its version, which is free. With `deep` it does one real headless run
+     * in an empty directory, which is the only thing that proves its login and its credits.
+     */
+    async check(body) {
+      const agent = agents.find((a) => a.id === body.agent);
+      if (!agent) throw fail(400, 'unknown agent');
+      const found = await findOnPath(agent.bin);
+      if (!found) return { ok: false, ms: 0, detail: `${agent.bin} is not on the server's PATH` };
+      if (!body.deep) {
+        const [bin, args] = await commandFor(found, agent.versionArgs ?? ['--version']);
+        const r = await run(bin, args, { cwd: tmpdir(), timeoutMs: CHECK_VERSION_TIMEOUT_MS });
+        return { ok: r.ok, ms: r.ms, detail: r.output.split('\n')[0].slice(0, 200) || found };
+      }
+      const model = agent.models.includes(body.model) ? body.model : agent.models[0];
+      await mkdir(runsDir, { recursive: true });
+      const dir = await mkdtemp(join(runsDir, 'check-'));
+      try {
+        const [bin, args] = await commandFor(found, agent.args({ prompt: CHECK_PROMPT, model }));
+        const r = await run(bin, args, { cwd: dir, timeoutMs: CHECK_RUN_TIMEOUT_MS });
+        const entries = r.output.split('\n').flatMap((line) => agent.readLine(line).entries);
+        const said = entries.filter((e) => e.kind === 'say').at(-1)?.text;
+        const problem = entries.filter((e) => e.kind === 'info').at(-1)?.text;
+        // An exit code of 0 with nothing said is a CLI that started and then talked to nobody.
+        const ok = r.ok && Boolean(said);
+        return { ok, ms: r.ms, model, detail: (ok ? said : problem || said || r.output.slice(-200) || 'the agent said nothing').slice(0, 300) };
+      } finally {
+        await rm(dir, RM_DIR).catch(() => {});
+      }
     },
   };
 

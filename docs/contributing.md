@@ -13,13 +13,14 @@ src/core/settings.ts     per-browser preferences: which games the home page show
 src/players/             llm (ZenMux), jev (TypeSafe), and the registry with bot / random / human
                          custom algorithms: algos (library), generate (prompt, trial, repair),
                          algoGames (per-game data docs and test positions), sandbox (the Worker)
+                         health: the checks Settings runs, one real request per service
 src/games/tetris/        engine, real-time match, canvas drawing, arena
 src/games/gomoku/        engine (shapes, candidates, bot), turn-based match, arena
 src/games/snake/         two-snake engine (move facts, bot), fixed-tick match, canvas drawing, arena
 src/games/g2048/         engine (slides, facts, expectimax bot), race match, arena with sliding tiles
 src/games/chess/         full-rules engine (perft-verified), SAN, move facts, alpha-beta bot, match, arena
 src/games/xiangqi/       full-rules engine (perft-verified), traditional notation, facts, bot, match, arena
-src/ui/                  lobby, settings, seat setup, shared pieces, match lifecycle hook
+src/ui/                  lobby, settings (games shown, service checks), seat setup, shared pieces, match lifecycle hook
 tests/                   engines, request builders, answer parsing, a full scripted match
 ```
 

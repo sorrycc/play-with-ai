@@ -6,6 +6,12 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const mode = process.argv[2];
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: `mode ${mode}` }, { type: 'tool_use', name: 'Edit', input: { file_path: '/tmp/x/range.js' } }] } }));
+// What a settings check hears: words, and no work.
+if (mode === 'say') console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'OK' }] } }));
+if (mode === 'refuse') {
+  console.log(JSON.stringify({ type: 'result', is_error: true, result: 'not logged in' }));
+  process.exit(1);
+}
 if (mode === 'solve') {
   const file = 'range.js';
   writeFileSync(file, readFileSync(file, 'utf8').replace('(start, end)', '(start, end, step = 1)').replace('i += 1', 'i += step'));

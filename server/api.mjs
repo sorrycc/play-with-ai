@@ -263,7 +263,7 @@ export function createApi(env) {
         if (!isLocalRequest(req.headers)) send(res, 403, { error: 'forbidden', message: 'The code duel only answers a page served from this machine.' });
         else if (req.method === 'GET' && route === 'cards') send(res, 200, await duel.cards());
         else if (req.method === 'GET' && route === 'state') send(res, 200, duel.state(url.searchParams));
-        else if (req.method === 'POST' && ['start', 'go', 'test', 'submit', 'stop'].includes(route)) send(res, 200, await duel[route](await readJson(req)));
+        else if (req.method === 'POST' && ['start', 'go', 'test', 'submit', 'stop', 'check'].includes(route)) send(res, 200, await duel[route](await readJson(req)));
         else send(res, 404, { error: 'not_found', message: 'Unknown API route.' });
       } else {
         send(res, 404, { error: 'not_found', message: 'Unknown API route.' });

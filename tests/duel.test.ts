@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -365,6 +365,24 @@ describe('a duel on disk', () => {
     await duel.go({ id: b.id });
     duel.stop({ id: b.id });
     expect(stateOf(duel, b.id).result).toEqual({ winner: null, reason: 'stopped' });
+  }, 60_000);
+
+  it('checks an agent for Settings: its version for free, one real run when asked', async () => {
+    const { duel, runsDir } = await duelWith('say');
+    expect(await duel.check({ agent: 'fake' })).toMatchObject({ ok: true, detail: process.version });
+    expect(await duel.check({ agent: 'fake', deep: true, model: 'm2' })).toMatchObject({ ok: true, model: 'm2', detail: 'OK' });
+    // Nothing of a check is left for the next one to find.
+    expect(existsSync(runsDir) ? (await readdir(runsDir)).filter((n) => n.startsWith('check-')) : []).toEqual([]);
+    await expect(duel.check({ agent: 'nobody' })).rejects.toMatchObject({ status: 400 });
+
+    // A failure is an answer, not an error: the page shows why.
+    const refusing = await duelWith('refuse');
+    expect(await refusing.duel.check({ agent: 'fake', deep: true })).toMatchObject({ ok: false, detail: 'not logged in' });
+    // Starting, and then saying nothing, is not working.
+    const silent = await duelWith('idle');
+    expect((await silent.duel.check({ agent: 'fake', deep: true })).ok).toBe(false);
+    const missing = createDuel({ agents: [{ id: 'gone', bin: 'no-such-cli-anywhere', models: ['m'], args: () => [], readLine: readStreamJson }], runsDir });
+    expect(await missing.check({ agent: 'gone', deep: true })).toMatchObject({ ok: false, detail: expect.stringContaining('PATH') });
   }, 60_000);
 
   it('takes the agent\'s whole process group with it, helpers of its own included', async () => {

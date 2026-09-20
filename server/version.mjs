@@ -5,4 +5,5 @@
 //
 //   2  /api/generate (custom algorithms), optionIds on /api/llm
 //   3  /api/duel/* (code duel), agents in /api/config
-export const API_VERSION = 3;
+//   4  /api/duel/check (Settings checks an agent)
+export const API_VERSION = 4;
