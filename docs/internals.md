@@ -24,11 +24,16 @@ In Gomoku 225 cells is too many to describe, so code offers the ~20 most relevan
 winning move and every forced block is always in the list, so the pruning never decides a game.
 Options are listed by board position, not by score, so the order does not leak the bot's ranking.
 
-In Snake a player picks one of at most three directions, each with exact facts: steps to the food,
-how many empty cells stay reachable (flood fill), whether it is a dead end, and whether the
-opponent's head could enter the same cell. The automatic tick is 0.9 s with Jev and 2.2 s with a
-model, because both have slow outliers well above their average; lockstep waits for every answer
-instead.
+In Snake a player picks one of at most three directions, each with exact facts: steps to the food
+along the shortest open path (not as the crow flies, and `null` when there is no path), how many
+empty cells stay reachable (flood fill), how many of those it would reach before the opponent could,
+whether it is a dead end, and whether the opponent's head could enter the same cell — with whether
+that head-on would still be won on length. A player is also told what actually decides the match:
+the clock, that the longer snake wins when it runs out, and how many steps are left before the walls
+close in again. The automatic tick is 0.9 s with Jev and 2.2 s with a model, because both have slow
+outliers well above their average; lockstep waits for every answer instead. A question is never
+thrown away at the deadline: the answer still arrives and is still counted, because it was paid for,
+and only the move is too late to play.
 
 In Chess every legal move is offered (there is no pruning to bias the choice), each with what it
 captures, whether it checks or mates, and the most material the opponent could win with one capture

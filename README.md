@@ -10,7 +10,9 @@ Games so far:
   board as garbage, and a piece keeps falling while its player thinks, so latency is part of the game.
 - **五子棋 Gomoku**: 15×15, five in a row wins. Turn-based, so only judgment counts.
 - **贪吃蛇 Snake**: two snakes on one shared grid, moving at the same instant. Meet head-on and both
-  die. Every step has a deadline: no answer, and the snake goes straight.
+  die — and then the longer one wins, which is also how the clock settles it, so length is the
+  score. Halfway through, the walls start closing in. Every step has a deadline: no answer, and the
+  snake goes straight.
 - **2048**: a race. Two boards, one opening, each seat sliding as fast as it answers, so a quick
   thinker simply gets more moves.
 - **国际象棋 Chess**: the full rules, down to threefold repetition and insufficient material. A move

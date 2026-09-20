@@ -6,22 +6,26 @@ import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { createPlayer } from '../../players';
 import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
-import { SEAT_COLORS, drawDuel } from './draw';
+import { SEAT_COLORS, drawDuel, type DuelView } from './draw';
 import type { Dir } from './engine';
-import { SnakeMatch, type SnakeOptions, type SnakeSeat } from './match';
+import { SnakeMatch, arenaPercent, type SnakeOptions, type SnakeSeat } from './match';
 
 const MAX_BOARD_W = 640;
+/** Shorter than this and a touch is a tap, not a swipe. */
+const SWIPE_PX = 24;
 
 type KeyMap = Record<string, Dir>;
 const KEYS_ARROWS: KeyMap = { ArrowUp: 'up', ArrowRight: 'right', ArrowDown: 'down', ArrowLeft: 'left' };
 const KEYS_WASD: KeyMap = { w: 'up', d: 'right', s: 'down', a: 'left' };
 
-function Board({ match }: { match: SnakeMatch }) {
+function Board({ match, frame, onSwipe }: { match: SnakeMatch; frame: number | null; onSwipe: ((dir: Dir) => void) | null }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const touch = useRef<{ x: number; y: number } | null>(null);
   const [width, setWidth] = useState(MAX_BOARD_W);
   const { cols, rows } = match.state;
   const height = (width / cols) * rows;
+  const done = match.status === 'done';
 
   // The grid keeps its aspect ratio and shrinks with the column it sits in.
   useEffect(() => {
@@ -43,19 +47,48 @@ function Board({ match }: { match: SnakeMatch }) {
     const ctx = el.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // A finished match is a still picture, or one frame of the replay: paint it once, then stop.
+    const view = (): DuelView =>
+      frame === null
+        ? { state: match.state, previous: match.previous, steppedAt: match.steppedAt, stepBudgetMs: match.stepBudgetMs, running: match.status === 'running' }
+        : { state: match.history[frame], previous: null, steppedAt: 0, stepBudgetMs: match.stepBudgetMs, running: false };
+    if (done) {
+      drawDuel(ctx, view(), width, height, performance.now());
+      return;
+    }
     let raf = 0;
-    const frame = () => {
-      drawDuel(ctx, match, width, height, performance.now());
-      raf = requestAnimationFrame(frame);
+    const paint = () => {
+      drawDuel(ctx, view(), width, height, performance.now());
+      raf = requestAnimationFrame(paint);
     };
-    raf = requestAnimationFrame(frame);
+    raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [match, width, height]);
+  }, [match, width, height, done, frame]);
+
+  const swipeStart = (e: React.PointerEvent) => {
+    touch.current = { x: e.clientX, y: e.clientY };
+  };
+  const swipeEnd = (e: React.PointerEvent) => {
+    const from = touch.current;
+    touch.current = null;
+    if (!from || !onSwipe) return;
+    const dx = e.clientX - from.x;
+    const dy = e.clientY - from.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_PX) return;
+    onSwipe(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up');
+  };
 
   return (
     <div ref={wrap} className="w-full min-w-0" style={{ maxWidth: MAX_BOARD_W + 8 }}>
       <div className="bezel" style={{ width: width + 8 }}>
-        <canvas ref={canvas} style={{ width, height, display: 'block' }} role="img" aria-label={t('snake.boardLabel')} />
+        <canvas
+          ref={canvas}
+          style={{ width, height, display: 'block', touchAction: onSwipe ? 'none' : undefined }}
+          role="img"
+          aria-label={t('snake.boardLabel')}
+          onPointerDown={onSwipe ? swipeStart : undefined}
+          onPointerUp={onSwipe ? swipeEnd : undefined}
+        />
       </div>
     </div>
   );
@@ -125,8 +158,10 @@ function SeatPanel({ seat, match, keysHint }: { seat: SnakeSeat; match: SnakeMat
 function compareRows(match: SnakeMatch): CompareRow[] {
   const [A, B] = match.seats;
   const both = (label: string, f: (s: SnakeSeat) => React.ReactNode): CompareRow => [label, f(A), f(B)];
+  const peak = (s: SnakeSeat) => Math.max(...match.history.map((state) => state.snakes[s.index].body.length));
   return [
     both(t('stat.length'), (s) => match.state.snakes[s.index].body.length),
+    both(t('stat.peak'), peak),
     both(t('stat.eaten'), (s) => match.state.snakes[s.index].eaten),
     both(t('stat.avgLatency'), (s) => (s.stats.latency ? fmtMs(s.stats.latency / s.stats.calls) : '–')),
     both(t('cmp.missedDeadlines'), (s) => (s.human ? '–' : s.late)),
@@ -157,16 +192,20 @@ export function SnakeArena({
         const pan = event.seat === 0 ? -0.4 : 0.4;
         if (event.type === 'eat') sfx.play('eat', { pan });
         else if (event.type === 'die') sfx.play('crash', { pan });
+        else if (event.type === 'shrink') sfx.play('garbage');
         else sfx.play('move', { pan });
       }),
   );
   const [, setClock] = useState(0);
   const [resultOpen, setResultOpen] = useState(true);
+  const [frame, setFrame] = useState<number | null>(null);
 
+  const running = match?.status === 'running';
   useEffect(() => {
+    if (!running) return;
     const id = setInterval(() => setClock((c) => c + 1), 250);
     return () => clearInterval(id);
-  }, []);
+  }, [running]);
 
   const humans = seats.filter((s) => s.kind === 'human').length;
   useEffect(() => {
@@ -192,6 +231,10 @@ export function SnakeArena({
   if (!match) return null;
   const [A, B] = match.seats;
   const hint = (index: 0 | 1) => t(humans === 2 ? (index === 0 ? 'keys.snakeLeft' : 'keys.snakeRight') : 'keys.snakeSolo');
+  // A swipe on the board steers the one person playing; with two of them it would be anyone's guess.
+  const soloSeat: 0 | 1 | null = humans === 1 ? (seats[0].kind === 'human' ? 0 : 1) : null;
+  const closing = match.stepsToShrink();
+  const last = match.history.length - 1;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-5 px-4 pb-10">
@@ -202,6 +245,10 @@ export function SnakeArena({
           {options.timeLimitSec > 0 && <span className="text-sm opacity-50"> / {formatClock(options.timeLimitSec * 1000)}</span>}
         </span>
         <span className="toy-sm !bg-sun px-3 py-1 text-sm font-bold">{t('snake.step', { n: match.state.steps })}</span>
+        {match.state.margin > 0 ? (
+          <span className="toy-sm !bg-pink px-3 py-1 text-sm font-bold text-white">{t('snake.arena', { n: arenaPercent(match.state) })}</span>
+        ) : null}
+        {running && closing !== null && closing <= 10 ? <span className="toy-sm px-3 py-1 text-sm font-bold">{t('snake.closing', { n: closing })}</span> : null}
         <span className="toy-sm px-3 py-1 text-sm font-bold">
           {options.lockstep ? `🧘 ${t('mode.lockstep')} · ` : ''}
           <span className="font-mono">{t('snake.tick', { ms: match.tickMs })}</span>
@@ -225,7 +272,24 @@ export function SnakeArena({
 
       <div className="flex w-full flex-col items-center gap-5 lg:flex-row lg:items-start lg:justify-center">
         <SeatPanel seat={A} match={match} keysHint={A.human ? hint(0) : null} />
-        <Board match={match} />
+        <div className="flex w-full min-w-0 flex-col items-center gap-2" style={{ maxWidth: MAX_BOARD_W + 8 }}>
+          <Board match={match} frame={frame} onSwipe={soloSeat === null ? null : (dir) => match.input(soloSeat, dir)} />
+          {match.status === 'done' && last > 0 && (
+            <label className="flex w-full items-center gap-2 text-xs font-bold opacity-70">
+              <span className="shrink-0">{t('snake.replay')}</span>
+              <input
+                type="range"
+                min={0}
+                max={last}
+                value={frame ?? last}
+                onChange={(e) => setFrame(Number(e.target.value))}
+                className="min-w-0 flex-1 accent-[var(--color-pink)]"
+                aria-label={t('snake.replay')}
+              />
+              <span className="w-16 shrink-0 text-right font-mono">{t('snake.step', { n: (frame ?? last) })}</span>
+            </label>
+          )}
+        </div>
         <SeatPanel seat={B} match={match} keysHint={B.human ? hint(1) : null} />
       </div>
 

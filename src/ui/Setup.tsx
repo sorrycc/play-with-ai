@@ -329,10 +329,16 @@ export function Setup({
           </div>
         ) : game === 'snake' ? (
           <>
-            <button className="pick px-3 py-2 text-left" aria-pressed={snake.lockstep} onClick={() => setSnake({ lockstep: !snake.lockstep })}>
-              <span className="block font-bold">{t('snake.lockstep')}</span>
-              <span className="block text-xs leading-tight opacity-70">{t('snake.lockstep.hint')}</span>
-            </button>
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              <button className="pick px-3 py-2 text-left" aria-pressed={snake.lockstep} onClick={() => setSnake({ lockstep: !snake.lockstep })}>
+                <span className="block font-bold">{t('snake.lockstep')}</span>
+                <span className="block text-xs leading-tight opacity-70">{t('snake.lockstep.hint')}</span>
+              </button>
+              <button className="pick px-3 py-2 text-left" aria-pressed={snake.suddenDeath} onClick={() => setSnake({ suddenDeath: !snake.suddenDeath })}>
+                <span className="block font-bold">{t('snake.sudden')}</span>
+                <span className="block text-xs leading-tight opacity-70">{t('snake.sudden.hint')}</span>
+              </button>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Option label={t('opt.tick', { ms: snakeTick })} hint={snake.tickAuto ? t('opt.tickAuto.hint') : t('opt.tick.hint')}>
                 <div className="flex items-center gap-2">

@@ -78,9 +78,12 @@ function snakeSamples(): AlgoInput[] {
   const out: AlgoInput[] = [];
   for (let step = 0; step < 60; step++) {
     const facts = [snake.analyze(state, 0), snake.analyze(state, 1)];
-    if ([0, 12, 30, 55].includes(step) && facts[step % 2].length) out.push(buildSnakeRequest(state, (step % 2) as 0 | 1, facts[step % 2], true).data);
-    const dirs = facts.map((f, i) => (f.length ? snake.botMove(f) : state.snakes[i].heading)) as [snake.Dir, snake.Dir];
+    const context = { secondsLeft: 60 - step, stepsToShrink: Math.max(1, 40 - step) };
+    if ([0, 12, 30, 55].includes(step) && facts[step % 2].length) out.push(buildSnakeRequest(state, (step % 2) as 0 | 1, facts[step % 2], true, context).data);
+    const dirs = facts.map((f, i) => (f.length ? snake.botMove(state, i as 0 | 1, f) : state.snakes[i].heading)) as [snake.Dir, snake.Dir];
     state = snake.stepDuel(state, dirs);
+    // One position with the walls already closed in one ring, so that case is in the sample too.
+    if (step === 40) state = snake.shrinkDuel(state);
     if (!state.snakes[0].alive || !state.snakes[1].alive) break;
   }
   return out;
@@ -148,11 +151,11 @@ export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
     samples: gomokuSamples,
   },
   snake: {
-    goal: 'Two snakes on one grid, moving at the same instant. A snake dies on a wall, on its own body or on the other snake; if both heads enter the same cell both die. Eating food grows the snake. If the opponent dies and you do not, you win; otherwise the longer snake wins at the time limit.',
+    goal: 'Two snakes on one grid, moving at the same instant. A snake dies on a wall, on its own body or on the other snake; if both heads enter the same cell both die. Eating food grows the snake. If the opponent dies and you do not, you win. When the clock runs out the LONGER snake wins, and the same rule settles a step on which both snakes die, so length is the score: eat. Halfway through the match the walls start closing in one ring at a time, and a snake caught outside the arena dies.',
     state:
-      'board: strings, top row first: "A" your head, "a" your body, "B" opponent head, "b" opponent body, "F" food, "." empty. cols, rows. yourHead, opponentHead, food: {row, col} (food may be null). yourHeading, opponentHeading: "up" "right" "down" "left". yourLength, opponentLength. yourStepsToFood, opponentStepsToFood: Manhattan distance or null.',
+      'board: strings, top row first: "A" your head, "a" your body, "B" opponent head, "b" opponent body, "F" food, "." empty, "#" a wall the closing arena has already taken. cols, rows. margin: how many rings the walls have closed in; a cell is inside the arena when margin <= row < rows - margin and margin <= col < cols - margin. yourHead, opponentHead, food: {row, col} (food may be null). yourHeading, opponentHeading: "up" "right" "down" "left". yourLength, opponentLength. yourEaten, opponentEaten. step: how many steps have been played. secondsLeft: seconds before the longer snake wins, or null without a limit. stepsToShrink: steps until the walls close in again, or null when they will not.',
     facts:
-      'One option per direction that is not immediately fatal (1 to 3 options; ids are "up" "right" "down" "left"). turn: "straight", "left turn" or "right turn". targetRow, targetCol. eats: boolean. foodDistance after the move (or null). reachable: empty cells reachable from the new head by flood fill; freeTotal: all empty cells. deadEnd: true when reachable is less than your length and your tail cannot be followed out (almost always fatal). canReachTail: boolean. headOnRisk: true when the opponent head could enter the same cell this step.',
+      'One option per direction that is not immediately fatal (1 to 3 options; ids are "up" "right" "down" "left"). turn: "straight", "left turn" or "right turn". targetRow, targetCol. eats: boolean. foodDistance: steps along the shortest open path from the new head to the food, or null when there is no path (foodReachable is false then). reachable: empty cells reachable from the new head by flood fill; freeTotal: all empty cells inside the arena; territory: how many of the reachable cells you would get to before the opponent could. deadEnd: true when reachable is less than your length and your tail cannot be followed out (almost always fatal). canReachTail: boolean. headOnRisk: true when the opponent head could enter the same cell this step; headOnWins: true when that head-on would still win, because you are the longer snake.',
     samples: snakeSamples,
   },
   '2048': {
