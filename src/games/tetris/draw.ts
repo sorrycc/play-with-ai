@@ -73,14 +73,29 @@ export function drawBoard(ctx: CanvasRenderingContext2D, side: TetrisSide, width
   }
 }
 
-/** The "next" preview, centred in a small square canvas. */
-export function drawNext(ctx: CanvasRenderingContext2D, piece: PieceName | null, size: number): void {
+/** One piece centred in a `width` × `height` box, drawn a little smaller further down the queue. */
+function piecePreview(ctx: CanvasRenderingContext2D, piece: PieceName, x: number, y: number, width: number, height: number, scale: number, alpha: number): void {
+  const state = PIECES[piece][0];
+  const cell = (Math.min(width, height) / 5) * scale;
+  ctx.save();
+  ctx.translate(x + (width - state.width * cell) / 2, y + (height - state.height * cell) / 2);
+  for (const [cx, cy] of state.cells) block(ctx, cx, cy, cell, PIECE_COLORS[piece], alpha);
+  ctx.restore();
+}
+
+/** The preview queue: the piece that comes next on top, the ones after it smaller and paler. */
+export function drawNext(ctx: CanvasRenderingContext2D, pieces: PieceName[], width: number, height: number): void {
+  ctx.clearRect(0, 0, width, height);
+  if (pieces.length === 0) return;
+  const slot = height / pieces.length;
+  pieces.forEach((piece, i) => {
+    piecePreview(ctx, piece, 0, i * slot, width, slot, i === 0 ? 1 : 0.78, i === 0 ? 1 : 0.6);
+  });
+}
+
+/** The hold slot; greyed out once it has been used for the piece in play. */
+export function drawHold(ctx: CanvasRenderingContext2D, piece: PieceName | null, used: boolean, size: number): void {
   ctx.clearRect(0, 0, size, size);
   if (!piece) return;
-  const state = PIECES[piece][0];
-  const cell = size / 5;
-  ctx.save();
-  ctx.translate((size - state.width * cell) / 2, (size - state.height * cell) / 2);
-  for (const [cx, cy] of state.cells) block(ctx, cx, cy, cell, PIECE_COLORS[piece]);
-  ctx.restore();
+  piecePreview(ctx, piece, 0, 0, size, size, 1, used ? 0.35 : 1);
 }

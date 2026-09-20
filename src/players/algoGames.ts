@@ -34,13 +34,22 @@ function tetrisSamples(): AlgoInput[] {
   const random = seededRandom(7);
   const pieces = tetris.makeBag(random).concat(tetris.makeBag(random), tetris.makeBag(random));
   let board = tetris.emptyBoard();
+  let lines = 0;
   const out: AlgoInput[] = [];
   pieces.forEach((piece, i) => {
     const placements = tetris.enumeratePlacements(board, piece);
     if (placements.length === 0) return;
-    if (i === 0 || i === 7 || i === 15 || i === 20) out.push(buildTetrisRequest({ board, current: piece, next: pieces[i + 1] ?? 'T', lines: 0 }, placements, true).data);
+    if (i === 0 || i === 7 || i === 15 || i === 20) {
+      // Versus positions, with a hold slot and garbage on the way in: the same shape a match sends.
+      const queue = Array.from({ length: 3 }, (_, k) => pieces[(i + 1 + k) % pieces.length]);
+      const side = { board, current: piece, queue, hold: i > 7 ? pieces[0] : null, holdUsed: false, pendingGarbage: i > 14 ? 2 : 0, lines };
+      const opponent = { maxHeight: Math.min(19, i), lines: Math.floor(i / 4), pendingGarbage: 0 };
+      out.push(buildTetrisRequest(side, placements, { realtime: true, mode: 'versus', opponent }).data);
+    }
     // A deliberately clumsy player, so later samples have holes and an uneven surface.
-    board = placements[(i * 5) % placements.length].afterBoard;
+    const chosen = placements[(i * 5) % placements.length];
+    lines += chosen.linesCleared;
+    board = chosen.afterBoard;
   });
   return out;
 }
@@ -121,11 +130,11 @@ function xiangqiSamples(): AlgoInput[] {
 
 export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
   tetris: {
-    goal: 'Tetris on a 10-wide, 20-tall board. Each call places one falling piece. Full rows clear; the game is lost when the stack reaches the top. In versus mode every cleared line also sends a garbage row to the opponent. Survive, and clear lines.',
+    goal: 'Tetris on a 10-wide, 20-tall board. Each call places one falling piece, or puts it in the hold slot. Full rows clear; the game is lost when the stack reaches the top. In versus mode clearing two rows at once sends one garbage row to the opponent, three sends two and four (a Tetris) sends four, a single sends nothing, and your own clears cancel garbage waiting for you before it lands. Survive, and clear lines.',
     state:
-      'board: 20 strings of 10 chars, top row first, "#" filled and "." empty. columnHeights: 10 numbers. maxHeight, holes (empty cells with a filled cell above), bumpiness (sum of height differences between neighbouring columns): numbers. currentPiece, nextPiece: one of I O T S Z J L. linesClearedSoFar: number.',
+      'board: 20 strings of 10 chars, top row first, "#" filled and "." empty. columnHeights: 10 numbers. maxHeight, holes (empty cells with a filled cell above), bumpiness (sum of height differences between neighbouring columns): numbers. currentPiece: one of I O T S Z J L. nextPieces: the next three, soonest first. holdPiece: the piece in the hold slot or null. holdAvailable: true while the hold option is still on offer this piece. pendingGarbage: rows that will be pushed in under your stack when this piece locks, so your whole stack moves up by that much. mode: "versus", "race" or "lockstep". linesClearedSoFar: number. opponentMaxHeight, opponentLines, opponentPendingGarbage: the other board, or null when there is none.',
     facts:
-      'One option per distinct place the current piece can land. column (0-9, leftmost cell), rotation (0-3), landingRow. linesCleared (0-4) by this placement. holesCreated, holesRemoved, holesAfter. maxHeightAfter, heightDelta (change in the tallest column; negative is good), aggregateHeightAfter (sum of column heights), bumpinessAfter, deepWellsAfter (columns 3+ lower than both neighbours), columnHeightsAfter (10 numbers).',
+      'One option per distinct board the current piece can leave behind, plus at most one hold option. action: "place" or "hold". column (0-9, leftmost cell), rotation (0-3, but a piece with fewer states only uses the first of them), landingRow (the top row of the piece where it locks). linesCleared (0-4) by this placement. holesCreated, holesRemoved, holesAfter. maxHeightAfter, heightDelta (change in the height of the tallest column; negative is good), aggregateHeightAfter (sum of column heights), bumpinessAfter, deepWellsAfter (columns 3+ lower than both neighbours), columnHeightsAfter (10 numbers). tuck: true when the piece has to be slid or turned under an overhang rather than dropped straight down, so a slow answer may arrive too late to play it. garbageSent: rows this clear sends in versus mode. On the hold option, which swaps the current piece for the held one and asks you again, the placement numbers are -1 or unchanged.',
     samples: tetrisSamples,
   },
   gomoku: {

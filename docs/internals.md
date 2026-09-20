@@ -10,6 +10,16 @@ describes every outcome in words with the same fields on every option (`lines_cl
 player gets the same `DecisionRequest` and returns one option id, so an illegal move cannot happen
 and every role is interchangeable.
 
+In Tetris the options are not the straight drops but every distinct board the piece can leave
+behind, found by breadth-first search over moves and turns from the spawn, so a placement tucked
+under an overhang is on offer too (`tuck` says which). Because the option carries the pose it was
+found at, the match locks the piece on exactly that pose: the board a player is promised is the
+board it gets. An answer that arrives after the piece has fallen past its placement cannot be
+played, and is counted as a missed deadline rather than dropped somewhere else. Alongside the
+board, a player is told what it is about to be hit with — `incoming_garbage`, the opponent's stack
+and lines, what each option would send — plus the next three pieces and the hold slot, which is one
+more option id rather than a second kind of answer.
+
 In Gomoku 225 cells is too many to describe, so code offers the ~20 most relevant cells. Every
 winning move and every forced block is always in the list, so the pruning never decides a game.
 Options are listed by board position, not by score, so the order does not leak the bot's ranking.
@@ -61,5 +71,7 @@ before you use it.
 
 Measured on 2026-09-19 through this proxy: DeepSeek V4.1 Flash answers in 1.4 to 3.5 s with
 reasoning off (about 12 s with it on), Jev in 0.3 to 0.8 s. That is why AI Tetris defaults to a
-gentle 400 ms per row, and why lockstep mode exists: it removes gravity so only decision quality is
-compared.
+gentle 400 ms per row, and why lockstep mode exists: it removes gravity for every seat, a person's
+included, so only decision quality is compared. A seat never has more than one unanswered request
+in flight — the older one is cut off — and an answer that turns up after its piece locked is still
+recorded, so a slow model's bill is visible instead of showing as $0.

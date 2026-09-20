@@ -23,7 +23,7 @@ const post = async (path: string, body: unknown) => {
 const board = emptyBoard();
 for (let x = 0; x < WIDTH; x++) if (x < 3 || x > 6) board[HEIGHT - 1][x] = 'G';
 const placements = enumeratePlacements(board, 'I');
-const tReq = buildTetrisRequest({ board, current: 'I', next: 'T', lines: 0 }, placements, true);
+const tReq = buildTetrisRequest({ board, current: 'I', queue: ['T', 'O', 'L'], hold: null, holdUsed: false, pendingGarbage: 0, lines: 0 }, placements, { realtime: true, mode: 'versus', opponent: { maxHeight: 6, lines: 2, pendingGarbage: 0 } });
 const clearing = placements.find((p) => p.linesCleared === 1)!.id;
 
 const g = emptyGomokuBoard();

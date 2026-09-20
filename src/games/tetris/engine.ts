@@ -198,6 +198,52 @@ export function boardStats(board: Board): BoardStats {
   };
 }
 
+// ---- Rotation -----------------------------------------------------------------------------------
+// Rotation states are normalised to their bounding box, so turning a piece would otherwise pin its
+// top-left corner and make it jump. `rotatedAnchor` keeps the box centred instead, and the kicks
+// below include vertical ones, so a piece resting on the stack can still turn (a floor kick).
+
+/** Where the box lands when `from` turns into `to`, keeping the piece's centre where it was. */
+export function rotatedAnchor(piece: PieceName, from: number, to: number, x: number, y: number): XY {
+  const a = PIECES[piece][from];
+  const b = PIECES[piece][to];
+  return [x + Math.round((a.width - b.width) / 2), y + Math.round((a.height - b.height) / 2)];
+}
+
+/** Tried in order; the first offset that fits wins. `[dx, dy]`, y growing downwards. */
+export const KICK_OFFSETS: XY[] = [
+  [0, 0],
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [-1, -1],
+  [1, -1],
+  [-2, 0],
+  [2, 0],
+  [0, -2],
+];
+
+export interface Pose {
+  rotation: number;
+  x: number;
+  y: number;
+}
+
+/** Turns `dir` (1 clockwise, -1 anticlockwise) with kicks, or null when nothing fits. */
+export function rotatePiece(board: Board, piece: PieceName, pose: Pose, dir: number): Pose | null {
+  const states = PIECES[piece].length;
+  const rotation = (pose.rotation + dir + states) % states;
+  if (rotation === pose.rotation) return { ...pose }; // O: one state, always "turns"
+  const [ax, ay] = rotatedAnchor(piece, pose.rotation, rotation, pose.x, pose.y);
+  const cells = PIECES[piece][rotation].cells;
+  for (const [dx, dy] of KICK_OFFSETS) {
+    if (!collides(board, cells, ax + dx, ay + dy)) return { rotation, x: ax + dx, y: ay + dy };
+  }
+  return null;
+}
+
+// ---- Placements ---------------------------------------------------------------------------------
+
 export interface Placement {
   id: string;
   piece: PieceName;
@@ -210,6 +256,10 @@ export interface Placement {
   holesCreated: number;
   holesRemoved: number;
   heightDelta: number;
+  /** True when a straight drop from the spawn row does not get here: the piece has to be tucked in. */
+  tuck: boolean;
+  /** Garbage rows this clear sends in versus mode. */
+  garbageSent: number;
   before: BoardStats;
   after: BoardStats;
   afterBoard: Board;
@@ -222,50 +272,153 @@ export function heuristicScore(p: Pick<Placement, 'after' | 'linesCleared'>): nu
   return -0.51 * s.aggregateHeight + 0.76 * p.linesCleared - 0.36 * s.holes - 0.18 * s.bumpiness;
 }
 
+export type Step = 'left' | 'right' | 'cw' | 'ccw' | 'down';
+const STEPS: Step[] = ['left', 'right', 'cw', 'ccw', 'down'];
+
+function step(board: Board, piece: PieceName, pose: Pose, move: Step): Pose | null {
+  if (move === 'cw') return rotatePiece(board, piece, pose, 1);
+  if (move === 'ccw') return rotatePiece(board, piece, pose, -1);
+  const dx = move === 'left' ? -1 : move === 'right' ? 1 : 0;
+  const dy = move === 'down' ? 1 : 0;
+  const next = { rotation: pose.rotation, x: pose.x + dx, y: pose.y + dy };
+  return collides(board, PIECES[piece][next.rotation].cells, next.x, next.y) ? null : next;
+}
+
+const poseKey = (p: Pose) => `${p.rotation},${p.x},${p.y}`;
+const resting = (board: Board, piece: PieceName, p: Pose) => collides(board, PIECES[piece][p.rotation].cells, p.x, p.y + 1);
+
+/** The pose a piece spawns in. */
+export function spawnPose(): Pose {
+  return { rotation: 0, x: SPAWN_X, y: 0 };
+}
+
+/** Every pose the piece can be moved into from `from`, in breadth-first order. */
+function reachablePoses(board: Board, piece: PieceName, from: Pose): Map<string, Pose> {
+  const seen = new Map<string, Pose>();
+  if (collides(board, PIECES[piece][from.rotation].cells, from.x, from.y)) return seen;
+  const queue: Pose[] = [from];
+  seen.set(poseKey(from), from);
+  for (let head = 0; head < queue.length; head++) {
+    const pose = queue[head];
+    for (const move of STEPS) {
+      const next = step(board, piece, pose, move);
+      if (!next) continue;
+      const key = poseKey(next);
+      if (seen.has(key)) continue;
+      seen.set(key, next);
+      queue.push(next);
+    }
+  }
+  return seen;
+}
+
 /**
- * Every reachable (rotation, x) for `piece` on `board`. A placement is reachable when the piece
- * fits at the spawn row and can drop straight down.
+ * Every distinct board the piece can leave behind, by any sequence of moves and turns from the
+ * spawn — so a piece can be slid or turned under an overhang, not only dropped straight down.
+ * Two poses that lock into the same board are one option.
  */
 export function enumeratePlacements(board: Board, piece: PieceName): Placement[] {
   const before = boardStats(board);
+  const poses = [...reachablePoses(board, piece, spawnPose()).values()].filter((p) => resting(board, piece, p));
+  // A stable order a person can read: by rotation, then left to right, then top to bottom.
+  poses.sort((a, b) => a.rotation - b.rotation || a.x - b.x || a.y - b.y);
   const seen = new Set<string>();
   const placements: Placement[] = [];
-  PIECES[piece].forEach((state, rotation) => {
-    for (let x = 0; x <= WIDTH - state.width; x++) {
-      if (collides(board, state.cells, x, 0)) continue;
-      const y = dropY(board, state.cells, x, 0);
-      const locked = lockPiece(board, piece, rotation, x, y);
-      const key = locked.map((r) => r.map((c) => (c ? '#' : '.')).join('')).join('/');
-      if (seen.has(key)) continue; // identical outcome from another rotation (O, I, S, Z)
-      seen.add(key);
-      const { board: after, cleared, rows } = clearLines(locked);
-      const stats = boardStats(after);
-      const outcome: Placement = {
-        id: `p${placements.length}`,
-        piece,
-        rotation,
-        x,
-        y,
-        cells: state.cells.map(([cx, cy]): XY => [x + cx, y + cy]),
-        linesCleared: cleared,
-        clearedRows: rows,
-        holesCreated: Math.max(0, stats.holes - before.holes),
-        holesRemoved: Math.max(0, before.holes - stats.holes),
-        heightDelta: stats.maxHeight - before.maxHeight,
-        before,
-        after: stats,
-        afterBoard: after,
-        heuristic: 0,
-      };
-      outcome.heuristic = heuristicScore(outcome);
-      placements.push(outcome);
-    }
-  });
+  for (const { rotation, x, y } of poses) {
+    const cells = PIECES[piece][rotation].cells;
+    const locked = lockPiece(board, piece, rotation, x, y);
+    const key = locked.map((r) => r.map((c) => (c ? '#' : '.')).join('')).join('/');
+    if (seen.has(key)) continue; // identical outcome from another rotation (O, I, S, Z) or another path
+    seen.add(key);
+    const { board: after, cleared, rows } = clearLines(locked);
+    const stats = boardStats(after);
+    const straight = !collides(board, cells, x, 0) && dropY(board, cells, x, 0) === y;
+    const outcome: Placement = {
+      id: `p${placements.length}`,
+      piece,
+      rotation,
+      x,
+      y,
+      cells: cells.map(([cx, cy]): XY => [x + cx, y + cy]),
+      linesCleared: cleared,
+      clearedRows: rows,
+      holesCreated: Math.max(0, stats.holes - before.holes),
+      holesRemoved: Math.max(0, before.holes - stats.holes),
+      heightDelta: stats.maxHeight - before.maxHeight,
+      tuck: !straight,
+      garbageSent: GARBAGE_FOR_LINES[cleared] ?? 0,
+      before,
+      after: stats,
+      afterBoard: after,
+      heuristic: 0,
+    };
+    outcome.heuristic = heuristicScore(outcome);
+    placements.push(outcome);
+  }
   return placements;
+}
+
+/**
+ * The moves that take the piece from `from` to `target`, or null when the piece has fallen past it.
+ * The match uses this both to check that an answer is still playable and to animate it.
+ */
+export function pathTo(board: Board, piece: PieceName, from: Pose, target: Pose): Step[] | null {
+  const key = poseKey(target);
+  if (poseKey(from) === key) return [];
+  const came = new Map<string, { pose: Pose; from: string; move: Step }>();
+  if (collides(board, PIECES[piece][from.rotation].cells, from.x, from.y)) return null;
+  const queue: Pose[] = [from];
+  const seen = new Set<string>([poseKey(from)]);
+  for (let head = 0; head < queue.length; head++) {
+    const pose = queue[head];
+    for (const move of STEPS) {
+      const next = step(board, piece, pose, move);
+      if (!next) continue;
+      const nextKey = poseKey(next);
+      if (seen.has(nextKey)) continue;
+      seen.add(nextKey);
+      came.set(nextKey, { pose: next, from: poseKey(pose), move });
+      if (nextKey === key) {
+        const steps: Step[] = [];
+        for (let at = nextKey; came.has(at); at = came.get(at)!.from) steps.unshift(came.get(at)!.move);
+        return steps;
+      }
+      queue.push(next);
+    }
+  }
+  return null;
 }
 
 export function bestByHeuristic(placements: Placement[]): Placement {
   return placements.reduce((best, p) => (p.heuristic > best.heuristic ? p : best));
+}
+
+/** How many candidates the two-ply bot looks at; the rest of the list is never the best anyway. */
+const LOOKAHEAD_WIDTH = 8;
+
+/**
+ * The classic bot, one piece deeper: for its best few placements it plays out the piece it already
+ * knows is coming and scores the board after both. A well that the next piece cannot use, or a
+ * flat surface that sets up a Tetris, is only visible from here.
+ */
+export function bestPlacement(placements: Placement[], next: PieceName | null): Placement {
+  if (placements.length === 0) throw new Error('no placements');
+  if (!next || placements.length === 1) return bestByHeuristic(placements);
+  const shortlist = placements.slice().sort((a, b) => b.heuristic - a.heuristic).slice(0, LOOKAHEAD_WIDTH);
+  let best = shortlist[0];
+  let bestValue = -Infinity;
+  for (const p of shortlist) {
+    const replies = enumeratePlacements(p.afterBoard, next);
+    // No reply at all means this placement loses the game next piece: never choose it if we can help it.
+    const value = replies.length
+      ? Math.max(...replies.map((q) => heuristicScore({ after: q.after, linesCleared: p.linesCleared + q.linesCleared })))
+      : -1000;
+    if (value > bestValue) {
+      bestValue = value;
+      best = p;
+    }
+  }
+  return best;
 }
 
 // ---- Descriptions ---------------------------------------------------------------------------
@@ -319,9 +472,14 @@ function describeHeightChange(p: Placement): string {
   return 'stack grows by several rows';
 }
 
+export function describeGarbage(n: number): string {
+  if (n === 0) return 'none';
+  return n === 1 ? 'one row' : `${n} rows`;
+}
+
 /** Same field names on every option so a model can compare them directly. */
-export function describePlacement(p: Placement): Record<string, string> {
-  return {
+export function describePlacement(p: Placement, versus = false): Record<string, string> {
+  const out: Record<string, string> = {
     where: describeWhere(p),
     lines_cleared: describeLines(p.linesCleared),
     holes_created: describeHoles(p.holesCreated),
@@ -330,7 +488,10 @@ export function describePlacement(p: Placement): Record<string, string> {
     height_change: describeHeightChange(p),
     surface_after: describeSurface(p.after.bumpiness),
     wells_after: describeWells(p.after.wells),
+    slid_into_place: p.tuck ? 'yes, the piece is slid or turned under an overhang' : 'no, it drops straight down',
   };
+  if (versus) out.garbage_sent = describeGarbage(p.garbageSent);
+  return out;
 }
 
 export function boardToText(board: Board): string[] {
@@ -340,6 +501,12 @@ export function boardToText(board: Board): string[] {
 // ---- Garbage (versus mode) --------------------------------------------------------------------
 
 export const GARBAGE = 'G' as const;
+
+/**
+ * Rows a clear sends, by lines cleared: the guideline table. A single sends nothing, so the way to
+ * attack is to stack up and clear several rows at once rather than to shovel one row at a time.
+ */
+export const GARBAGE_FOR_LINES = [0, 0, 1, 2, 4] as const;
 
 /**
  * Pushes `count` garbage rows in from the bottom, each full except one gap. `overflow` is true

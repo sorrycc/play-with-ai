@@ -180,7 +180,17 @@ export function App() {
           };
           // `key` remounts the arena, which is how a rematch gets a fresh match.
           return screen.game === 'tetris' ? (
-            <TetrisArena key={screen.round} {...common} options={setup.tetris} />
+            <TetrisArena
+              key={screen.round}
+              {...common}
+              // Two seats that never vary play the same seed exactly the same way, move for move,
+              // so a rematch between them needs a new piece sequence to be a rematch at all.
+              onRematch={() => {
+                if (setup.seats.every((s) => s.kind === 'bot' || s.kind === 'custom')) setSetup((s) => ({ ...s, tetris: { ...s.tetris, seed: 1 + Math.floor(Math.random() * 99999) } }));
+                common.onRematch();
+              }}
+              options={setup.tetris}
+            />
           ) : screen.game === 'gomoku' ? (
             <GomokuArena key={screen.round} {...common} options={setup.gomoku} />
           ) : screen.game === 'snake' ? (

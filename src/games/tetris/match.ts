@@ -4,33 +4,42 @@
 //
 // When a piece spawns the player is asked at once, and gravity pulls the piece down while it
 // thinks. If the piece lands before the answer arrives it locks where it is: a missed deadline.
+// The answer is still recorded when it turns up, because it was paid for either way.
 
-import type { Player, PlayerStats, DecisionRequest } from '../../core/types';
+import type { MoveOption, Player, PlayerStats, DecisionRequest } from '../../core/types';
 import { freshStats, recordDecision, seededRandom, sleep, formatClock } from '../../core/types';
 import { t } from '../../core/i18n';
 import {
   type Board,
+  type BoardStats,
   type PieceName,
   type Placement,
+  type Pose,
+  GARBAGE_FOR_LINES,
   PIECES,
   SPAWN_X,
   WIDTH,
   addGarbage,
-  bestByHeuristic,
+  bestPlacement,
   boardStats,
   boardToText,
   clearLines,
   collides,
+  describeGarbage,
   describeHeight,
   describeHoles,
   describePlacement,
   describeSurface,
+  describeWells,
   dropY,
   emptyBoard,
   enumeratePlacements,
   lockPiece,
   makeBag,
+  pathTo,
+  rotatePiece,
   scoreForLines,
+  spawnPose,
 } from './engine';
 
 export const SPEEDUPS = {
@@ -44,7 +53,12 @@ export type SpeedupName = keyof typeof SPEEDUPS;
 export const MIN_GRAVITY_MS = 40;
 const LOCK_DELAY_MS = 500;
 const MAX_LOCK_RESETS = 12;
-const KICKS = [0, -1, 1, -2, 2];
+/** How many pieces ahead a player can see. */
+export const NEXT_COUNT = 3;
+/** A seat whose calls keep failing should not hammer the proxy once per piece. */
+const ERROR_BACKOFF_MS = 600;
+/** The option id that swaps the current piece with the hold slot instead of placing it. */
+export const HOLD_ID = 'hold';
 
 export interface TetrisOptions {
   seed: number;
@@ -53,7 +67,7 @@ export interface TetrisOptions {
   speedup: SpeedupName;
   /** Cleared lines become garbage rows for the opponent; first to top out loses. */
   garbage: boolean;
-  /** No gravity for model seats: only decision quality is compared. */
+  /** No gravity at all, for any seat: only decision quality is compared. */
   lockstep: boolean;
   /** 0 = no limit */
   timeLimitSec: number;
@@ -68,8 +82,21 @@ export const TETRIS_DEFAULTS: TetrisOptions = {
   timeLimitSec: 180,
 };
 
+export type TetrisMode = 'versus' | 'race' | 'lockstep';
+
+export function modeOf(options: Pick<TetrisOptions, 'garbage' | 'lockstep'>): TetrisMode {
+  return options.lockstep ? 'lockstep' : options.garbage ? 'versus' : 'race';
+}
+
 export const TETRIS_RULES =
   'You are playing Tetris. The board is 10 columns wide and 20 rows tall. A full row disappears. The game is lost when the stack reaches the top.';
+
+const MODE_RULES: Record<TetrisMode, string> = {
+  versus:
+    ' Clearing two rows at once sends one garbage row to the opponent, three rows sends two, and four rows (a Tetris) sends four. A single row sends nothing. Garbage arriving at your board pushes your whole stack up, and rows you clear cancel garbage waiting for you before it lands.',
+  race: ' You and the opponent play separate boards from the same piece sequence; whoever lasts more pieces wins.',
+  lockstep: ' There is no clock and no gravity: take the time you need.',
+};
 
 export const TETRIS_PRIORITIES = [
   'Clearing lines is good. Clearing more lines at once is better.',
@@ -78,15 +105,14 @@ export const TETRIS_PRIORITIES = [
   'Keep the surface flat. Prefer surface_after of flat over slightly uneven, bumpy, or very jagged.',
   'One deep well is acceptable because the next I piece can fill it. Several deep wells are bad.',
   'When the stack is dangerously high, survival matters more than a clean surface.',
+  'When incoming_garbage is not none, your stack is about to be pushed up by that many rows: clear a line now, because clearing cancels garbage before it lands.',
+  'Holding costs you this turn, so hold only when no placement is decent and the held piece would fit much better.',
 ];
 
-export type TetrisAction = 'left' | 'right' | 'rotateCw' | 'rotateCcw' | 'soft' | 'hard';
+export type TetrisAction = 'left' | 'right' | 'rotateCw' | 'rotateCcw' | 'soft' | 'hard' | 'hold';
 
-export interface Active {
+export interface Active extends Pose {
   piece: PieceName;
-  rotation: number;
-  x: number;
-  y: number;
 }
 
 export interface TetrisSide {
@@ -96,7 +122,11 @@ export interface TetrisSide {
   board: Board;
   pendingGarbage: number;
   current: PieceName;
-  next: PieceName;
+  /** The next `NEXT_COUNT` pieces, soonest first. */
+  queue: PieceName[];
+  hold: PieceName | null;
+  /** Hold is one swap per piece, so it cannot be used to stall. */
+  holdUsed: boolean;
   active: Active | null;
   /** Cells of the chosen placement, outlined while the piece slides there. */
   target: [number, number][] | null;
@@ -106,9 +136,19 @@ export interface TetrisSide {
   score: number;
   sent: number;
   received: number;
+  /** Incoming garbage wiped out by this side's own clears. */
+  cancelled: number;
+  holds: number;
   clears: number[];
+  /** Tallest the stack ever got. */
+  peak: number;
+  /** Requests issued, answers that arrived after the piece had locked, slowest answer. */
+  asked: number;
+  late: number;
+  slowestMs: number;
   over: boolean;
   lostAt: number | null;
+  lostTo: 'stack' | 'garbage' | null;
   thinking: boolean;
   /** performance.now() of the last garbage hit, for the shake animation. */
   hitAt: number;
@@ -118,7 +158,7 @@ export interface TetrisSide {
 
 /** Something audible or visible happened. The match stays DOM-free; the arena decides what to do with it. */
 export interface TetrisEvent {
-  type: 'move' | 'rotate' | 'drop' | 'lock' | 'clear' | 'garbage' | 'miss' | 'topout';
+  type: 'move' | 'rotate' | 'drop' | 'lock' | 'clear' | 'garbage' | 'miss' | 'topout' | 'hold';
   side: 0 | 1;
   /** For 'clear': how many lines. */
   lines?: number;
@@ -142,15 +182,117 @@ function whereText(p: Placement): string {
 
 interface Control {
   lockNow(): void;
+  hold(): void;
   restartGravity(): void;
   touchLock(): void;
 }
 
-export function buildTetrisRequest(side: Pick<TetrisSide, 'board' | 'current' | 'next' | 'lines'>, placements: Placement[], realtime: boolean): DecisionRequest {
+/** Everything a request needs from a side, so tests and samples can build one without a match. */
+export interface RequestSide {
+  board: Board;
+  current: PieceName;
+  queue: PieceName[];
+  hold: PieceName | null;
+  holdUsed: boolean;
+  pendingGarbage: number;
+  lines: number;
+}
+
+export interface OpponentView {
+  maxHeight: number;
+  lines: number;
+  pendingGarbage: number;
+}
+
+export interface RequestContext {
+  /** True when a clock is running while the player thinks. */
+  realtime: boolean;
+  mode: TetrisMode;
+  /** Null in a solitaire position, such as the samples a generated algorithm is tried on. */
+  opponent: OpponentView | null;
+}
+
+/**
+ * The option that swaps instead of placing. It carries the same field names as every placement —
+ * a model compares like with like — with `action` saying what actually happens.
+ */
+function holdOption(side: RequestSide, stats: BoardStats, versus: boolean): MoveOption {
+  const taken = side.hold ?? side.queue[0];
+  const description: Record<string, string> = {
+    action: side.hold
+      ? `swap the ${side.current} for the ${side.hold} you are holding, then choose again with the ${taken}`
+      : `put the ${side.current} in the empty hold slot and choose again with the ${taken}`,
+    where: 'nothing lands this turn',
+    lines_cleared: 'none',
+    holes_created: 'none',
+    holes_uncovered: 'none',
+    stack_height_after: describeHeight(stats.maxHeight),
+    height_change: 'stack does not get taller',
+    surface_after: describeSurface(stats.bumpiness),
+    wells_after: describeWells(stats.wells),
+    slid_into_place: 'no, nothing is placed',
+  };
+  if (versus) description.garbage_sent = 'none';
+  return { id: HOLD_ID, description };
+}
+
+function holdFacts(stats: BoardStats): Record<string, unknown> {
+  return {
+    action: 'hold',
+    column: -1,
+    rotation: -1,
+    landingRow: -1,
+    linesCleared: 0,
+    holesCreated: 0,
+    holesRemoved: 0,
+    holesAfter: stats.holes,
+    maxHeightAfter: stats.maxHeight,
+    heightDelta: 0,
+    aggregateHeightAfter: stats.aggregateHeight,
+    bumpinessAfter: stats.bumpiness,
+    deepWellsAfter: stats.wells.length,
+    columnHeightsAfter: stats.heights,
+    tuck: false,
+    garbageSent: 0,
+  };
+}
+
+export function buildTetrisRequest(side: RequestSide, placements: Placement[], ctx: RequestContext): DecisionRequest {
   const stats = boardStats(side.board);
+  const versus = ctx.mode === 'versus';
+  const canHold = !side.holdUsed && (side.hold !== null || side.queue.length > 0);
+  const options: MoveOption[] = placements.map((p) => ({
+    id: p.id,
+    description: { action: `place the ${p.piece}`, ...describePlacement(p, versus) },
+  }));
+  const facts = placements.map((p) => ({
+    id: p.id,
+    facts: {
+      action: 'place',
+      column: p.x,
+      rotation: p.rotation,
+      landingRow: p.y,
+      linesCleared: p.linesCleared,
+      holesCreated: p.holesCreated,
+      holesRemoved: p.holesRemoved,
+      holesAfter: p.after.holes,
+      maxHeightAfter: p.after.maxHeight,
+      heightDelta: p.heightDelta,
+      aggregateHeightAfter: p.after.aggregateHeight,
+      bumpinessAfter: p.after.bumpiness,
+      deepWellsAfter: p.after.wells.length,
+      columnHeightsAfter: p.after.heights,
+      tuck: p.tuck,
+      garbageSent: p.garbageSent,
+    } as Record<string, unknown>,
+  }));
+  if (canHold) {
+    options.push(holdOption(side, stats, versus));
+    facts.push({ id: HOLD_ID, facts: holdFacts(stats) });
+  }
   return {
     game: 'tetris',
-    rules: TETRIS_RULES,
+    rules: TETRIS_RULES + MODE_RULES[ctx.mode],
     question: 'Which placement of `current_piece` should the player choose? Each option describes the board after that placement.',
     priorities: TETRIS_PRIORITIES,
     state: {
@@ -161,10 +303,18 @@ export function buildTetrisRequest(side: Pick<TetrisSide, 'board' | 'current' | 
       holes_in_stack: describeHoles(stats.holes),
       surface: describeSurface(stats.bumpiness),
       current_piece: side.current,
-      next_piece: side.next,
+      next_pieces: side.queue.slice(),
+      hold_piece: side.hold ?? 'empty',
+      hold_available: canHold ? 'yes' : 'no, already used for this piece',
+      incoming_garbage: describeGarbage(side.pendingGarbage),
+      incoming_garbage_note: 'Garbage rows waiting to be pushed in under your stack when the current piece locks.',
+      mode: ctx.mode,
       lines_cleared_so_far: side.lines,
+      opponent_stack_height: ctx.opponent ? describeHeight(ctx.opponent.maxHeight) : 'no opponent',
+      opponent_lines_cleared: ctx.opponent ? ctx.opponent.lines : 0,
+      opponent_incoming_garbage: ctx.opponent ? describeGarbage(ctx.opponent.pendingGarbage) : 'none',
     },
-    options: placements.map((p) => ({ id: p.id, description: describePlacement(p) })),
+    options,
     data: {
       state: {
         board: boardToText(side.board),
@@ -173,30 +323,20 @@ export function buildTetrisRequest(side: Pick<TetrisSide, 'board' | 'current' | 
         holes: stats.holes,
         bumpiness: stats.bumpiness,
         currentPiece: side.current,
-        nextPiece: side.next,
+        nextPieces: side.queue.slice(),
+        holdPiece: side.hold,
+        holdAvailable: canHold,
+        pendingGarbage: side.pendingGarbage,
+        mode: ctx.mode,
         linesClearedSoFar: side.lines,
+        opponentMaxHeight: ctx.opponent ? ctx.opponent.maxHeight : null,
+        opponentLines: ctx.opponent ? ctx.opponent.lines : null,
+        opponentPendingGarbage: ctx.opponent ? ctx.opponent.pendingGarbage : null,
       },
-      options: placements.map((p) => ({
-        id: p.id,
-        facts: {
-          column: p.x,
-          rotation: p.rotation,
-          landingRow: p.y,
-          linesCleared: p.linesCleared,
-          holesCreated: p.holesCreated,
-          holesRemoved: p.holesRemoved,
-          holesAfter: p.after.holes,
-          maxHeightAfter: p.after.maxHeight,
-          heightDelta: p.heightDelta,
-          aggregateHeightAfter: p.after.aggregateHeight,
-          bumpinessAfter: p.after.bumpiness,
-          deepWellsAfter: p.after.wells.length,
-          columnHeightsAfter: p.after.heights,
-        },
-      })),
+      options: facts,
     },
-    botChoice: () => bestByHeuristic(placements).id,
-    realtime,
+    botChoice: () => bestPlacement(placements, side.queue[0] ?? null).id,
+    realtime: ctx.realtime,
   };
 }
 
@@ -214,6 +354,8 @@ export class TetrisMatch {
   private randoms: (() => number)[] = [];
   private garbageRandoms: (() => number)[] = [];
   private controls: (Control | null)[] = [null, null];
+  /** At most one answer per seat may still be on its way after its piece locked; older ones are cut off. */
+  private stale: (AbortController | null)[] = [null, null];
   private timer: ReturnType<typeof setInterval> | null = null;
   private onChange: () => void;
   private emit: (event: TetrisEvent) => void;
@@ -237,7 +379,9 @@ export class TetrisMatch {
       board: emptyBoard(),
       pendingGarbage: 0,
       current: this.nextPiece(index),
-      next: this.nextPiece(index),
+      queue: Array.from({ length: NEXT_COUNT }, () => this.nextPiece(index)),
+      hold: null,
+      holdUsed: false,
       active: null,
       target: null,
       flash: [],
@@ -246,9 +390,16 @@ export class TetrisMatch {
       score: 0,
       sent: 0,
       received: 0,
+      cancelled: 0,
+      holds: 0,
       clears: [0, 0, 0, 0, 0],
+      peak: 0,
+      asked: 0,
+      late: 0,
+      slowestMs: 0,
       over: false,
       lostAt: null,
+      lostTo: null,
       thinking: false,
       hitAt: 0,
       move: t('m.ready'),
@@ -261,6 +412,12 @@ export class TetrisMatch {
     return this.bags[index].pop()!;
   }
 
+  /** Takes the next piece off the queue and refills it. */
+  private advance(side: TetrisSide): void {
+    side.current = side.queue.shift()!;
+    side.queue.push(this.nextPiece(side.index));
+  }
+
   elapsed(): number {
     if (this.status === 'idle') return 0;
     return (this.status === 'done' ? this.endedAt : performance.now()) - this.startedAt;
@@ -268,12 +425,17 @@ export class TetrisMatch {
 
   level(): number {
     const { everyMs } = SPEEDUPS[this.options.speedup];
-    return Number.isFinite(everyMs) ? Math.floor(this.elapsed() / everyMs) + 1 : 1;
+    if (this.options.lockstep || !Number.isFinite(everyMs)) return 1;
+    return Math.floor(this.elapsed() / everyMs) + 1;
   }
 
   gravityNow(): number {
     const { factor } = SPEEDUPS[this.options.speedup];
     return Math.max(MIN_GRAVITY_MS, Math.round(this.options.gravityMs * Math.pow(factor, this.level() - 1)));
+  }
+
+  mode(): TetrisMode {
+    return modeOf(this.options);
   }
 
   start(): void {
@@ -297,11 +459,18 @@ export class TetrisMatch {
 
   // ---- Garbage ---------------------------------------------------------------------------------
 
-  private sendGarbage(from: TetrisSide, count: number): void {
-    const to = this.sides[from.index === 0 ? 1 : 0];
-    if (to.over || count <= 0) return;
-    to.pendingGarbage += count;
-    from.sent += count;
+  /** Rows a clear sends after cancelling whatever is already waiting for the clearing side. */
+  private resolveAttack(side: TetrisSide, cleared: number): void {
+    const attack = GARBAGE_FOR_LINES[cleared] ?? 0;
+    if (attack <= 0) return;
+    const cancelled = Math.min(side.pendingGarbage, attack);
+    side.pendingGarbage -= cancelled;
+    side.cancelled += cancelled;
+    const left = attack - cancelled;
+    if (left <= 0) return;
+    side.sent += left; // counted even when the opponent has already topped out
+    const to = this.sides[side.index === 0 ? 1 : 0];
+    if (!to.over) to.pendingGarbage += left;
   }
 
   /** Incoming garbage lands when the receiver's piece has locked, before the next spawn. */
@@ -320,7 +489,7 @@ export class TetrisMatch {
   }
 
   /** Locks a piece, clears lines (with a flash), sends garbage, advances the queue. */
-  private async settlePiece(side: TetrisSide, landed: { rotation: number; x: number; y: number }): Promise<void> {
+  private async settlePiece(side: TetrisSide, landed: Pose): Promise<void> {
     const piece = side.active!.piece;
     side.active = null;
     side.target = null;
@@ -334,21 +503,38 @@ export class TetrisMatch {
       side.flash = [];
     }
     side.board = board;
+    // The flash is the only pause in a piece: a stop during it must not score after the verdict.
+    if (this.abort.signal.aborted) return;
     side.lines += cleared;
     side.clears[cleared] += 1;
-    if (this.options.garbage && cleared > 0) this.sendGarbage(side, cleared);
+    side.peak = Math.max(side.peak, boardStats(board).maxHeight);
+    if (this.options.garbage && cleared > 0) this.resolveAttack(side, cleared);
     side.score += scoreForLines(cleared, Math.floor(side.lines / 10) + 1);
     side.pieces += 1;
-    side.current = side.next;
-    side.next = this.nextPiece(side.index);
+    this.advance(side);
     this.onChange();
     // Without garbage the survivor wins by outlasting the loser's piece count.
     if (!this.options.garbage) this.checkEnd();
   }
 
-  private topOut(side: TetrisSide): void {
+  /** Swaps the current piece with the hold slot. One swap per piece, so it cannot be used to stall. */
+  private swapHold(side: TetrisSide): void {
+    const held = side.hold;
+    side.hold = side.current;
+    if (held) side.current = held;
+    else this.advance(side);
+    side.holdUsed = true;
+    side.holds += 1;
+    side.active = null;
+    side.target = null;
+    this.emit({ type: 'hold', side: side.index });
+    this.onChange();
+  }
+
+  private topOut(side: TetrisSide, cause: 'stack' | 'garbage'): void {
     side.over = true;
     side.lostAt = this.elapsed();
+    side.lostTo = cause;
     side.active = null;
     side.target = null;
     side.thinking = false;
@@ -358,114 +544,160 @@ export class TetrisMatch {
     this.onChange();
   }
 
+  private opponentView(side: TetrisSide): OpponentView {
+    const other = this.sides[side.index === 0 ? 1 : 0];
+    return { maxHeight: boardStats(other.board).maxHeight, lines: other.lines, pendingGarbage: other.pendingGarbage };
+  }
+
   // ---- Model / bot seat ---------------------------------------------------------------------------
+
+  /** Cuts off an answer that is still on its way from an earlier piece of this seat. */
+  private dropStale(side: TetrisSide): void {
+    this.stale[side.index]?.abort();
+    this.stale[side.index] = null;
+  }
 
   private async runModelSide(side: TetrisSide): Promise<void> {
     const signal = this.abort.signal;
     const lockstep = this.options.lockstep;
     while (!side.over && !signal.aborted) {
-      if (this.applyGarbage(side)) return this.topOut(side);
-      const piece = side.current;
-      if (collides(side.board, PIECES[piece][0].cells, SPAWN_X, 0)) return this.topOut(side);
-      const placements = enumeratePlacements(side.board, piece);
-      if (placements.length === 0) return this.topOut(side);
-      side.active = { piece, rotation: 0, x: SPAWN_X, y: 0 };
-      side.target = null;
+      if (this.applyGarbage(side)) return this.topOut(side, 'garbage');
+      side.holdUsed = false;
+      // One turn per piece, plus one more each time the player decides to hold instead of place.
+      for (let turn = 0; turn <= 1 && !side.over && !signal.aborted; turn++) {
+        const piece = side.current;
+        if (collides(side.board, PIECES[piece][0].cells, SPAWN_X, 0)) return this.topOut(side, 'stack');
+        const placements = enumeratePlacements(side.board, piece);
+        if (placements.length === 0) return this.topOut(side, 'stack');
+        side.active = { piece, ...spawnPose() };
+        side.target = null;
 
-      // Ask right away; the piece falls while we wait.
-      const askedAt = performance.now();
-      let decision: Awaited<ReturnType<Player['decide']>> | null = null;
-      let settled = false;
-      let failed = false;
-      side.thinking = true;
-      const pending = side.player
-        .decide(buildTetrisRequest(side, placements, !lockstep), signal)
-        .then((d) => {
-          decision = d;
-        })
-        .catch((err: Error & { status?: number }) => {
-          if (signal.aborted) return;
-          failed = true;
-          side.stats.errors += 1;
-          side.move = t('m.error', { msg: err.message });
-          // A bad key or an unknown model will fail every move: say so once, loudly.
-          if (err.status === 401 || err.status === 403 || err.status === 404 || err.status === 503) {
-            this.error = `${side.player.name}: ${err.message}`;
-          }
-        })
-        .finally(() => {
-          settled = true;
-          side.thinking = false;
-        });
+        // Ask right away; the piece falls while we wait.
+        const askedAt = performance.now();
+        const request = buildTetrisRequest(side, placements, { realtime: !lockstep, mode: this.mode(), opponent: this.opponentView(side) });
+        let decision: Awaited<ReturnType<Player['decide']>> | null = null;
+        let settled = false;
+        let failed = false;
+        let deadline = false; // the piece locked before this answer arrived
+        side.thinking = true;
+        side.asked += 1;
+        // One controller per piece, chained to the match, so a superseded request can be cut off.
+        const turnAbort = new AbortController();
+        const relay = () => turnAbort.abort();
+        signal.addEventListener('abort', relay, { once: true });
+        const pending = side.player
+          .decide(request, turnAbort.signal)
+          .then((d) => {
+            // Late or not, the call was made and paid for, so it is counted either way.
+            recordDecision(side.stats, d);
+            side.slowestMs = Math.max(side.slowestMs, d.latencyMs);
+            if (deadline) side.late += 1;
+            else decision = d;
+          })
+          .catch((err: Error & { status?: number }) => {
+            if (signal.aborted || turnAbort.signal.aborted) return;
+            failed = true;
+            side.stats.errors += 1;
+            side.move = t('m.error', { msg: err.message });
+            // A bad key or an unknown model will fail every move: say so once, loudly.
+            if (err.status === 401 || err.status === 403 || err.status === 404 || err.status === 503) {
+              this.error = `${side.player.name}: ${err.message}`;
+            }
+          })
+          .finally(() => {
+            settled = true;
+            if (!deadline) side.thinking = false;
+            signal.removeEventListener('abort', relay);
+            if (this.stale[side.index] === turnAbort) this.stale[side.index] = null;
+          });
 
-      let answered = false;
-      if (lockstep) {
-        await pending;
-        answered = decision !== null;
-        // An error in lockstep would otherwise spin without a pause.
-        if (failed) await sleep(600);
-      } else {
-        while (!signal.aborted) {
-          if (settled) {
-            answered = decision !== null;
-            break;
+        let answered = false;
+        if (lockstep) {
+          await pending;
+          answered = decision !== null;
+        } else {
+          while (!signal.aborted) {
+            if (settled) break;
+            await sleep(this.gravityNow());
+            if (signal.aborted) return;
+            if (settled) break;
+            const a = side.active;
+            if (!collides(side.board, PIECES[a.piece][a.rotation].cells, a.x, a.y + 1)) a.y += 1;
+            else break; // landed before the answer: a missed deadline
           }
-          await sleep(this.gravityNow());
-          if (signal.aborted) return;
-          if (settled) {
-            answered = decision !== null;
-            break;
-          }
-          const a = side.active;
-          if (!collides(side.board, PIECES[a.piece][a.rotation].cells, a.x, a.y + 1)) a.y += 1;
-          else break; // landed before the answer: a missed deadline
+          answered = decision !== null;
         }
-      }
-      if (signal.aborted) return;
+        if (signal.aborted) return;
+        if (!settled) {
+          // The piece is locking now. Keep this answer alive long enough to be counted, but never
+          // let a seat accumulate more than one unanswered request.
+          deadline = true;
+          side.thinking = false;
+          this.dropStale(side);
+          this.stale[side.index] = turnAbort;
+        }
 
-      const a = side.active;
-      const lockInPlace = () => ({ rotation: a.rotation, x: a.x, y: dropY(side.board, PIECES[piece][a.rotation].cells, a.x, a.y) });
-      let landed: { rotation: number; x: number; y: number };
-      const d = decision as Awaited<ReturnType<Player['decide']>> | null;
-      if (answered && d) {
-        recordDecision(side.stats, d);
-        const chosen = d.optionId ? placements.find((p) => p.id === d.optionId) : undefined;
-        if (!chosen) {
-          side.stats.invalid += 1;
-          side.move = t('m.invalidDropped', { piece, note: d.note });
-          landed = lockInPlace();
-        } else if (collides(side.board, PIECES[piece][chosen.rotation].cells, chosen.x, a.y)) {
-          // The answer came too late for the rotation to fit at this height.
-          side.stats.missed += 1;
-          this.emit({ type: 'miss', side: side.index });
-          side.move = t('m.tooLate', { piece, ms: Math.round(d.latencyMs) });
+        const a = side.active;
+        const lockInPlace = (): Pose => ({ rotation: a.rotation, x: a.x, y: dropY(side.board, PIECES[piece][a.rotation].cells, a.x, a.y) });
+        let landed: Pose;
+        const d = decision as Awaited<ReturnType<Player['decide']>> | null;
+        if (answered && d) {
+          if (d.optionId === HOLD_ID && !side.holdUsed) {
+            side.move = t('m.held', { piece });
+            this.swapHold(side);
+            continue; // same falling piece slot, new piece in hand
+          }
+          const chosen = d.optionId ? placements.find((p) => p.id === d.optionId) : undefined;
+          if (!chosen) {
+            side.stats.invalid += 1;
+            side.move = t('m.invalidDropped', { piece, note: d.note });
+            landed = lockInPlace();
+          } else {
+            // The piece has fallen while the answer travelled. Ask the engine whether the chosen
+            // placement can still be reached from here; if it cannot, the answer came too late.
+            const steps = pathTo(side.board, piece, a, chosen);
+            if (!steps) {
+              side.stats.missed += 1;
+              this.emit({ type: 'miss', side: side.index });
+              side.move = t('m.tooLate', { piece, ms: Math.round(d.latencyMs) });
+              landed = lockInPlace();
+            } else {
+              side.target = chosen.cells;
+              for (const move of steps) {
+                if (signal.aborted) return;
+                if (move === 'left') a.x -= 1;
+                else if (move === 'right') a.x += 1;
+                else if (move === 'down') a.y += 1;
+                else {
+                  const turned = rotatePiece(side.board, piece, a, move === 'cw' ? 1 : -1)!;
+                  a.rotation = turned.rotation;
+                  a.x = turned.x;
+                  a.y = turned.y;
+                }
+                await sleep(move === 'down' ? 10 : 18);
+              }
+              // Exactly the placement the player was shown, so the board it was promised is the board it gets.
+              landed = { rotation: chosen.rotation, x: chosen.x, y: chosen.y };
+              const took = d.latencyMs > 0 ? t('m.took', { ms: Math.round(d.latencyMs) }) : '';
+              side.move = t('m.placed', { piece, where: whereText(chosen), took });
+            }
+          }
+        } else if (failed) {
+          // An error is an error, not a missed deadline: counting it as both doubled every failure.
           landed = lockInPlace();
         } else {
-          side.target = chosen.cells;
-          a.rotation = chosen.rotation;
-          while (a.x !== chosen.x && !signal.aborted) {
-            a.x += Math.sign(chosen.x - a.x);
-            await sleep(18);
-          }
-          const restY = dropY(side.board, PIECES[piece][chosen.rotation].cells, chosen.x, a.y);
-          while (a.y < restY && !signal.aborted) {
-            a.y += 1;
-            await sleep(10);
-          }
-          landed = { rotation: chosen.rotation, x: chosen.x, y: restY };
-          const took = d.latencyMs > 0 ? t('m.took', { ms: Math.round(d.latencyMs) }) : '';
-          side.move = t('m.placed', { piece, where: whereText(chosen), took });
+          side.stats.missed += 1;
+          this.emit({ type: 'miss', side: side.index });
+          side.move = t('m.noAnswer', { piece, ms: Math.round(performance.now() - askedAt) });
+          landed = lockInPlace();
         }
-      } else {
-        side.stats.missed += 1;
-        this.emit({ type: 'miss', side: side.index });
-        if (!failed) side.move = t('m.noAnswer', { piece, ms: Math.round(performance.now() - askedAt) });
-        landed = lockInPlace();
+        if (signal.aborted) return;
+        await this.settlePiece(side, landed);
+        if (failed) await sleep(ERROR_BACKOFF_MS); // do not hammer a proxy that is refusing us
+        // Local players answer instantly; without a pause they would finish a game in a blink.
+        else if (d && d.latencyMs === 0) await sleep(lockstep ? 60 : 140);
+        break;
       }
-      if (signal.aborted) return;
-      await this.settlePiece(side, landed);
-      // Local players answer instantly; without a pause they would finish a game in a blink.
-      if (d && d.latencyMs === 0) await sleep(lockstep ? 60 : 140);
     }
   }
 
@@ -481,17 +713,12 @@ export class TetrisMatch {
 
   private tryRotate(side: TetrisSide, dir: number): boolean {
     const a = side.active!;
-    const states = PIECES[a.piece].length;
-    const rotation = (a.rotation + dir + states) % states;
-    const cells = PIECES[a.piece][rotation].cells;
-    for (const kick of KICKS) {
-      if (!collides(side.board, cells, a.x + kick, a.y)) {
-        a.rotation = rotation;
-        a.x += kick;
-        return true;
-      }
-    }
-    return false;
+    const turned = rotatePiece(side.board, a.piece, a, dir);
+    if (!turned) return false;
+    a.rotation = turned.rotation;
+    a.x = turned.x;
+    a.y = turned.y;
+    return true;
   }
 
   /** A key press or touch button for a human seat. Ignored for any other seat. */
@@ -514,16 +741,14 @@ export class TetrisMatch {
         moved = this.tryRotate(side, -1);
         break;
       case 'soft':
-        if (this.tryMove(side, 0, 1)) {
-          side.score += 1;
-          control.restartGravity();
-        }
+        if (this.tryMove(side, 0, 1)) control.restartGravity();
         break;
+      case 'hold':
+        if (!side.holdUsed) control.hold();
+        return;
       case 'hard': {
         const a = side.active;
-        const y = dropY(side.board, PIECES[a.piece][a.rotation].cells, a.x, a.y);
-        side.score += 2 * (y - a.y);
-        a.y = y;
+        a.y = dropY(side.board, PIECES[a.piece][a.rotation].cells, a.x, a.y);
         this.emit({ type: 'drop', side: side.index });
         control.lockNow();
         return;
@@ -534,23 +759,34 @@ export class TetrisMatch {
     if (moved && collides(side.board, PIECES[a.piece][a.rotation].cells, a.x, a.y + 1)) control.touchLock();
   }
 
-  /** One piece: gravity ticks, a lock delay when resting, and the controls above. */
-  private playPiece(side: TetrisSide): Promise<{ rotation: number; x: number; y: number }> {
+  /**
+   * One piece: gravity ticks, a lock delay when resting, and the controls above. Resolves with the
+   * pose to lock, or 'hold' when the person put the piece away instead. In lockstep there is no
+   * gravity for anyone, so the piece waits for a hard drop.
+   */
+  private playPiece(side: TetrisSide): Promise<Pose | 'hold'> {
     const signal = this.abort.signal;
+    const gravity = !this.options.lockstep;
     return new Promise((resolve) => {
       let gravityTimer: ReturnType<typeof setTimeout> | undefined;
       let lockTimer: ReturnType<typeof setTimeout> | undefined;
       let resets = 0;
       let done = false;
-      const finish = () => {
+      const end = (value: Pose | 'hold') => {
         if (done) return;
         done = true;
         clearTimeout(gravityTimer);
         clearTimeout(lockTimer);
         this.controls[side.index] = null;
-        const a = side.active!;
-        resolve({ rotation: a.rotation, x: a.x, y: a.y });
+        // One listener per piece would otherwise pile up on the match signal for the whole game.
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
       };
+      const finish = () => {
+        const a = side.active!;
+        end({ rotation: a.rotation, x: a.x, y: a.y });
+      };
+      const onAbort = () => finish();
       const armLock = () => {
         clearTimeout(lockTimer);
         lockTimer = setTimeout(finish, LOCK_DELAY_MS);
@@ -567,20 +803,22 @@ export class TetrisMatch {
       };
       this.controls[side.index] = {
         lockNow: finish,
+        hold: () => end('hold'),
         restartGravity: () => {
+          if (!gravity) return;
           clearTimeout(gravityTimer);
           gravityTimer = setTimeout(tick, this.gravityNow());
         },
         // A successful move or rotation while resting restarts the lock delay, a few times.
         touchLock: () => {
-          if (resets < MAX_LOCK_RESETS) {
+          if (gravity && resets < MAX_LOCK_RESETS) {
             resets += 1;
             armLock();
           }
         },
       };
-      signal.addEventListener('abort', finish, { once: true });
-      gravityTimer = setTimeout(tick, this.gravityNow());
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (gravity) gravityTimer = setTimeout(tick, this.gravityNow());
     });
   }
 
@@ -588,13 +826,21 @@ export class TetrisMatch {
     const signal = this.abort.signal;
     side.move = t('m.yourMove');
     while (!side.over && !signal.aborted) {
-      if (this.applyGarbage(side)) return this.topOut(side);
-      const piece = side.current;
-      if (collides(side.board, PIECES[piece][0].cells, SPAWN_X, 0)) return this.topOut(side);
-      side.active = { piece, rotation: 0, x: SPAWN_X, y: 0 };
-      const landed = await this.playPiece(side);
-      if (signal.aborted) return;
-      await this.settlePiece(side, landed);
+      if (this.applyGarbage(side)) return this.topOut(side, 'garbage');
+      side.holdUsed = false;
+      for (let turn = 0; turn <= 1 && !side.over && !signal.aborted; turn++) {
+        const piece = side.current;
+        if (collides(side.board, PIECES[piece][0].cells, SPAWN_X, 0)) return this.topOut(side, 'stack');
+        side.active = { piece, ...spawnPose() };
+        const landed = await this.playPiece(side);
+        if (signal.aborted) return;
+        if (landed === 'hold') {
+          this.swapHold(side);
+          continue;
+        }
+        await this.settlePiece(side, landed);
+        break;
+      }
     }
   }
 
@@ -632,6 +878,7 @@ export class TetrisMatch {
     if (this.status === 'idle') this.startedAt = this.endedAt;
     this.status = 'done';
     this.abort.abort();
+    for (const side of this.sides) this.dropStale(side);
     if (this.timer) clearInterval(this.timer);
     this.controls = [null, null];
     for (const side of this.sides) {

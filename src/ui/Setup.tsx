@@ -278,7 +278,7 @@ export function Setup({
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Option label={t('opt.gravity', { ms: tetris.gravityMs })} hint={t('opt.gravity.hint')}>
-                <input type="range" min={80} max={1000} step={10} value={tetris.gravityMs} disabled={tetris.lockstep && !seats.some((s) => s.kind === 'human')} onChange={(e) => setTetris({ gravityMs: Number(e.target.value) })} className="accent-[var(--color-pink)]" />
+                <input type="range" min={80} max={1000} step={10} value={tetris.gravityMs} disabled={tetris.lockstep} onChange={(e) => setTetris({ gravityMs: Number(e.target.value) })} className="accent-[var(--color-pink)]" />
               </Option>
               <Option label={t('opt.speedup')}>
                 <select className="field" value={tetris.speedup} onChange={(e) => setTetris({ speedup: e.target.value as SpeedupName })}>
