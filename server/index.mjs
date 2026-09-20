@@ -24,7 +24,8 @@ const MIME = {
 
 async function serveStatic(res, urlPath) {
   let filePath = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, '');
-  if (filePath === '/' || filePath === '') filePath = '/index.html';
+  // normalize() turns '/' into '\' on Windows.
+  if (/^[/\\]?$/.test(filePath)) filePath = '/index.html';
   let full = join(DIST, filePath);
   if (!full.startsWith(DIST)) {
     res.writeHead(403);

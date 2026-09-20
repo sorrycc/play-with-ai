@@ -18,7 +18,7 @@ function toolSubject(input) {
   if (!input || typeof input !== 'object') return '';
   const file = input.file_path ?? input.path;
   // The run directory is a long temporary path nobody needs to read.
-  if (typeof file === 'string') return file.split('/').pop();
+  if (typeof file === 'string') return file.split(/[\\/]/).pop();
   const other = input.command ?? input.pattern ?? input.query ?? input.description;
   return typeof other === 'string' ? clip(other, 120) : '';
 }

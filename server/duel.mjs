@@ -29,14 +29,15 @@
 //
 // These routes write files and run code, so they answer only a page served from this machine.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { constants, existsSync, rmSync } from 'node:fs';
 import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents.mjs';
 
+const WIN = process.platform === 'win32';
 const CHALLENGES_DIR = join(fileURLToPath(new URL('..', import.meta.url)), 'challenges');
 const VERIFY_TIMEOUT_MS = 90_000;
 const INSTALL_TIMEOUT_MS = 180_000;
@@ -62,6 +63,12 @@ const HEAD_STARTS_SEC = [0, 15, 30, 60];
 /** The "no agent" seat: the same card and clock, nobody on the other side. */
 export const PRACTICE = 'practice';
 const HIDDEN_TEST = 'challenge.test.js';
+/** Git for Windows rewrites line endings by default, and warns about it into the diff. */
+const NO_CRLF = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false'];
+/** Retries: on Windows a directory a just-killed process had open stays EBUSY for a moment. */
+const RM_DIR = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
+/** Started with node rather than through node_modules/.bin, where Windows has a .cmd. */
+const AVA_CLI = join('node_modules', 'ava', 'entrypoints', 'cli.mjs');
 /** What only the server needs: the page gets the rest of card.json. */
 const SERVER_ONLY = ['dir', 'files', 'publicTest', 'test', 'hiddenTests'];
 
@@ -85,20 +92,32 @@ export const editableFiles = (card) => card.files.filter((name) => !card.publicT
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
 // eslint-disable-next-line no-control-regex
-const plain = (text) => text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+const plain = (text) => text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').replace(/\r\n/g, '\n');
 const tail = (text) => (text.length > MAX_OUTPUT_CHARS ? `…\n${text.slice(-MAX_OUTPUT_CHARS)}` : text);
 
-/** Its own process group, so a runner's workers and whatever they started go with it. */
-function killGroup(pid, signal) {
+/**
+ * Its own process group, so a runner's workers and whatever they started go with it.
+ * Windows has neither groups nor signals: taskkill /T walks the tree from a parent that is still
+ * alive, and /F is the only kind of kill there is. Synchronous, because shutdown() has to be.
+ */
+function killGroup(child, signal) {
   try {
-    process.kill(-pid, signal);
+    if (!WIN) return void process.kill(-child.pid, signal);
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   } catch {
     /* already gone, or never had a group */
   }
 }
 
-/** Runs a command to completion; never rejects. Output is stdout and stderr interleaved, colours removed. */
-function run(bin, args, { cwd, timeoutMs, env }) {
+/** A child in its own group where there are groups; on Windows that would be a console window of its own. */
+const SPAWN = { stdio: ['ignore', 'pipe', 'pipe'], detached: !WIN, windowsHide: true };
+
+/**
+ * Runs a command to completion; never rejects. Output is stdout and stderr interleaved, colours removed.
+ * `shell` is for npm, which on Windows is a .cmd that only cmd.exe can start; its arguments are ours.
+ */
+function run(bin, args, { cwd, timeoutMs, env, shell = false }) {
   return new Promise((resolve) => {
     const started = Date.now();
     let output = '';
@@ -106,7 +125,8 @@ function run(bin, args, { cwd, timeoutMs, env }) {
     let child;
     try {
       // Detached: `node --test` and ava run a process per file, and a timeout must reach them too.
-      child = spawn(bin, args, { cwd, env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      const options = { ...SPAWN, cwd, env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ...env } };
+      child = shell ? spawn([bin, ...args].join(' '), { ...options, shell: true }) : spawn(bin, args, options);
     } catch (error) {
       return resolve({ ok: false, output: String(error.message), ms: Date.now() - started });
     }
@@ -121,7 +141,7 @@ function run(bin, args, { cwd, timeoutMs, env }) {
     };
     const timer = setTimeout(() => {
       take(`\n(timed out after ${Math.round(timeoutMs / 1000)} s)`);
-      killGroup(child.pid, 'SIGKILL');
+      killGroup(child, 'SIGKILL');
       child.kill('SIGKILL');
     }, timeoutMs);
     child.stdout.on('data', take);
@@ -133,24 +153,49 @@ function run(bin, args, { cwd, timeoutMs, env }) {
     child.on('close', (code) => {
       clearTimeout(timer);
       // Whatever the runner left behind in its group has no one to report to.
-      killGroup(child.pid, 'SIGKILL');
+      killGroup(child, 'SIGKILL');
       const text = tail(plain(output).trim());
       resolve({ ok: code === 0, output: flooded ? `(output was cut: the run printed more than ${Math.round(MAX_CAPTURE_BYTES / 1000)} kB)\n${text}` : text, ms: Date.now() - started });
     });
   });
 }
 
-async function findOnPath(bin, pathVar = process.env.PATH || '') {
-  for (const dir of pathVar.split(delimiter).filter(Boolean)) {
-    const full = join(dir, bin);
-    try {
-      await access(full, constants.X_OK);
-      return full;
-    } catch {
-      /* next */
+/**
+ * On Windows a bare name is not a file: PATHEXT says what it may be, in order, so an .exe wins over
+ * the .cmd npm leaves beside it. The extensionless file npm also leaves there is a shell script.
+ */
+export async function findOnPath(bin, { pathVar = process.env.PATH || '', win = WIN, pathExt = process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' } = {}) {
+  const names = win && !extname(bin) ? pathExt.split(';').filter(Boolean).map((ext) => bin + ext.toLowerCase()) : [bin];
+  for (const dir of pathVar.split(win ? ';' : delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const full = join(dir, name);
+      try {
+        await access(full, constants.X_OK);
+        return full;
+      } catch {
+        /* next */
+      }
     }
   }
   return null;
+}
+
+/** What an npm .cmd shim starts: the last line is `"%_prog%" "%dp0%\node_modules\…\cli.js" %*`. */
+export function shimTarget(text) {
+  const found = /"%(?:~dp0|dp0%)\\?([^"%]+)"\s+%\*/.exec(text);
+  return found ? found[1] : null;
+}
+
+/**
+ * How to start `bin` without a shell. A .cmd needs cmd.exe, and cmd.exe cannot carry a prompt: it
+ * ends an argument at the first newline. So a shim is read for the script or .exe it would start.
+ */
+async function commandFor(bin, args) {
+  if (!/\.(cmd|bat)$/i.test(bin)) return [bin, args];
+  const target = shimTarget(await readFile(bin, 'utf8').catch(() => ''));
+  if (!target) throw fail(503, `${bin} is a batch file this server cannot start; install the agent's .exe instead`);
+  const full = join(dirname(bin), target);
+  return /\.exe$/i.test(full) ? [full, args] : [process.execPath, [full, ...args]];
 }
 
 /** Diagnostic keys that say where a failure happened, not what it was. */
@@ -284,11 +329,11 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
   /** A card whose tests need packages has them installed once, the first time anyone plays it. */
   function ensureInstalled(card) {
     const startDir = join(card.dir, 'start');
-    if (card.test !== 'ava' || existsSync(join(startDir, 'node_modules', '.bin', 'ava'))) return Promise.resolve();
+    if (card.test !== 'ava' || existsSync(join(startDir, AVA_CLI))) return Promise.resolve();
     if (!installing.has(card.id)) {
       installing.set(
         card.id,
-        run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: startDir, timeoutMs: INSTALL_TIMEOUT_MS }).then((r) => {
+        run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: startDir, timeoutMs: INSTALL_TIMEOUT_MS, shell: WIN }).then((r) => {
           installing.delete(card.id);
           if (!r.ok) throw fail(500, `npm ci failed in challenges/${card.id}/start:\n${r.output.slice(-600)}`);
         }),
@@ -301,28 +346,28 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
     // Clone where the file system can (APFS): thousands of small files in node_modules.
     await cp(join(card.dir, 'start'), dir, { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
     await writeFile(join(dir, '.gitignore'), 'node_modules/\n');
-    const git = (...args) => run('git', ['-c', 'user.name=duel', '-c', 'user.email=duel@local', ...args], { cwd: dir, timeoutMs: 20_000 });
+    const git = (...args) => run('git', ['-c', 'user.name=duel', '-c', 'user.email=duel@local', ...NO_CRLF, ...args], { cwd: dir, timeoutMs: 20_000 });
     await git('init', '-q');
     await git('add', '-A');
     await git('commit', '-qm', 'start');
   }
 
   async function changedFiles(dir) {
-    const r = await run('git', ['status', '--short', '--', '.', `:!${HIDDEN_TEST}`], { cwd: dir, timeoutMs: 10_000 });
+    const r = await run('git', [...NO_CRLF, 'status', '--short', '--', '.', `:!${HIDDEN_TEST}`], { cwd: dir, timeoutMs: 10_000 });
     // "XY name": the status letters, then the path.
     return r.ok ? r.output.split('\n').map((l) => l.trim().replace(/^\S+\s+/, '')).filter(Boolean) : [];
   }
 
   /** What a side actually wrote, as a patch. The start is a commit, so this is one command. */
   async function diffOf(dir) {
-    const r = await run('git', ['diff', '--no-color', '--', '.', `:!${HIDDEN_TEST}`], { cwd: dir, timeoutMs: 10_000 });
+    const r = await run('git', [...NO_CRLF, 'diff', '--no-color', '--', '.', `:!${HIDDEN_TEST}`], { cwd: dir, timeoutMs: 10_000 });
     if (!r.ok || !r.output.trim()) return '';
     return r.output.length > MAX_DIFF_CHARS ? `${r.output.slice(0, MAX_DIFF_CHARS)}\n…` : r.output;
   }
 
   const runTests = (card, dir, files) =>
     card.test === 'ava'
-      ? run(join(dir, 'node_modules', '.bin', 'ava'), ['--tap', ...files], { cwd: dir, timeoutMs: VERIFY_TIMEOUT_MS })
+      ? run(process.execPath, [join(dir, AVA_CLI), '--tap', ...files], { cwd: dir, timeoutMs: VERIFY_TIMEOUT_MS })
       : run(process.execPath, ['--test', '--test-reporter=tap', ...files], { cwd: dir, timeoutMs: VERIFY_TIMEOUT_MS });
 
   /** The repository's own tests are the card's, not the contestant's: put them back before judging. */
@@ -350,8 +395,8 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
     const child = match.child;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     // Its own process group: a CLI's helpers and the tests it started must go with it.
-    killGroup(child.pid, 'SIGTERM');
-    match.killTimer = setTimeout(() => killGroup(child.pid, 'SIGKILL'), 2000);
+    killGroup(child, 'SIGTERM');
+    match.killTimer = setTimeout(() => killGroup(child, 'SIGKILL'), 2000);
     match.killTimer.unref();
   }
 
@@ -379,7 +424,7 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
       );
     }
     await Promise.all(jobs).catch(() => {});
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rm(dir, RM_DIR).catch(() => {});
   }
 
   function settle(match, forced) {
@@ -418,7 +463,8 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
     const side = match.sides.agent;
     const agent = agents.find((a) => a.id === match.agent);
     side.status = 'working';
-    const child = spawn(match.agentBin, agent.args({ prompt: match.prompt, model: match.model }), { cwd: join(match.dir, 'agent'), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const [bin, leading] = match.agentCommand;
+    const child = spawn(bin, [...leading, ...agent.args({ prompt: match.prompt, model: match.model })], { ...SPAWN, cwd: join(match.dir, 'agent') });
     match.child = child;
 
     let buffer = '';
@@ -520,14 +566,14 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
     for (const match of runs.values()) {
       const child = match.child;
       if (child && child.exitCode === null && child.signalCode === null) {
-        killGroup(child.pid, 'SIGTERM');
+        killGroup(child, 'SIGTERM');
         // No 2 s grace: a timer here would never fire, and an agent that ignores SIGTERM would
         // be left orphaned, working on a duel nobody will ever see.
-        killGroup(child.pid, 'SIGKILL');
+        killGroup(child, 'SIGKILL');
       }
       if (match.dir) {
         try {
-          rmSync(match.dir, { recursive: true, force: true });
+          rmSync(match.dir, RM_DIR);
         } catch {
           /* best effort on the way out */
         }
@@ -561,6 +607,7 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
       const headStartSec = HEAD_STARTS_SEC.includes(body.headStartSec) ? body.headStartSec : 0;
       const agentBin = agent ? await findOnPath(agent.bin) : null;
       if (agent && !agentBin) throw fail(503, `${agent.bin} is not on the server's PATH`);
+      const agentCommand = agent ? await commandFor(agentBin, []) : null;
 
       // One duel at a time: a reloaded page must not leave an agent working for nobody.
       stopAll();
@@ -570,7 +617,7 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
       await mkdir(runsDir, { recursive: true });
       // Every directory here belongs to a duel that is over, or to a process that died holding it.
       const stale = (await readdir(runsDir)).filter((n) => n.startsWith('run-'));
-      await Promise.all(stale.map((n) => rm(join(runsDir, n), { recursive: true, force: true }).catch(() => {})));
+      await Promise.all(stale.map((n) => rm(join(runsDir, n), RM_DIR).catch(() => {})));
 
       const id = `run-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`;
       const dir = join(runsDir, id);
@@ -588,7 +635,7 @@ export function createDuel({ challengesDir = CHALLENGES_DIR, agents = AGENTS, ru
         card,
         prompt: promptFor(card),
         agent: agent?.id ?? PRACTICE,
-        agentBin,
+        agentCommand,
         model,
         limitMs: limitSec * 1000,
         headStartMs: agent ? headStartSec * 1000 : 0,

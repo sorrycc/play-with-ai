@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { AGENTS, readStreamJson } from '../server/agents.mjs';
 // @ts-expect-error plain .mjs module, the server side of the duel
-import { adjudicate, createDuel, editableFiles, isLocalRequest, judge, promptFor, readTap } from '../server/duel.mjs';
+import { adjudicate, createDuel, editableFiles, findOnPath, isLocalRequest, judge, promptFor, readTap, shimTarget } from '../server/duel.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FAKE = join(ROOT, 'tests/fixtures/fake-agent.mjs');
@@ -113,6 +113,28 @@ describe('duel routes', () => {
     // Another site posting to the local server, and a name that was rebound to 127.0.0.1.
     expect(isLocalRequest({ host: '127.0.0.1:5173', origin: 'https://evil.example' })).toBe(false);
     expect(isLocalRequest({ host: 'evil.example:5173', origin: 'http://evil.example:5173' })).toBe(false);
+  });
+});
+
+describe('on Windows', () => {
+  it('finds a bare name by PATHEXT, the .exe before the .cmd, never the shell script beside them', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'duel-path-'));
+    try {
+      for (const name of ['tool', 'tool.cmd', 'other', 'other.cmd', 'other.exe']) await writeFile(join(dir, name), '', { mode: 0o755 });
+      const find = (bin: string) => findOnPath(bin, { pathVar: dir, win: true, pathExt: '.COM;.EXE;.BAT;.CMD' });
+      expect(await find('tool')).toBe(join(dir, 'tool.cmd'));
+      expect(await find('other')).toBe(join(dir, 'other.exe'));
+      expect(await find('missing')).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads what an npm .cmd shim would start, so the prompt never goes through cmd.exe', () => {
+    const shim = '@ECHO off\r\nSETLOCAL\r\nCALL :find_dp0\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@qoder-ai\\qodercli\\bin\\cli.js" %*\r\n';
+    expect(shimTarget(shim)).toBe('node_modules\\@qoder-ai\\qodercli\\bin\\cli.js');
+    expect(shimTarget('@"%~dp0\\vendor\\tool.exe" %*')).toBe('vendor\\tool.exe');
+    expect(shimTarget('@echo hello')).toBeNull();
   });
 });
 

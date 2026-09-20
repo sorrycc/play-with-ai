@@ -52,7 +52,7 @@ no CLI installed at all.
   duel is over, the page shows what each side wrote, as a patch, side by side.
 - The fastest pass on each card is remembered in the browser and shown on the card.
 - One duel at a time: starting one, stopping, leaving the page or stopping the server kills the
-  agent of the previous one (its whole process group) and removes its run directory. A tab that
+  agent of the previous one (its whole process group; on Windows, its process tree via `taskkill`) and removes its run directory. A tab that
   closes says so with a beacon; a page that simply stops asking loses its duel after 90 s.
 
 ## Adding an agent or a card
