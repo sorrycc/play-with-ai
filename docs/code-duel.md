@@ -71,6 +71,11 @@ matches it. That stops another website, or a rebound DNS name, from driving them
 `127.0.0.1`. It is still a local tool: anything that can set its own headers gets to run code here,
 so do not expose it.
 
+A deployment that wants the duel anyway lists its public host names in `DUEL_HOSTS`
+(`play.example.com,other.example.com`). The origin check still applies, and `ADMIN_PASSWORD` is then
+the only thing between a visitor and a shell: change it, and run the server as a user with nothing
+to lose.
+
 Measured on 2026-09-20 with the emoji card (a two-line fix), when its prompt also asked for readme
 and test updates: `Qwen3.8-Max` had the fix in after 77 s but was still on the readme and tests
 when the 3-minute limit killed it; each of its turns took about 10 s. A person who knows where to

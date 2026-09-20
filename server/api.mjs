@@ -72,6 +72,8 @@ export function createApi(env) {
   const typesafeKey = (env.TYPESAFE_API_KEY || '').trim();
   let modelsCache = null; // { at, models }
   const duel = createDuel();
+  // Hosts a deployment serves the duel on, besides this machine: "play.example.com,other.example.com".
+  const duelHosts = (env.DUEL_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
   const auth = createAuth(env);
   // Wrong guesses queue up behind each other, one a second across all clients, so a short password
   // can't be brute-forced by guessing in parallel. A correct password never waits.
@@ -295,7 +297,7 @@ export function createApi(env) {
         await jev(req, res);
       } else if (url.pathname.startsWith('/api/duel/')) {
         const route = url.pathname.slice('/api/duel/'.length);
-        if (!isLocalRequest(req.headers)) send(res, 403, { error: 'forbidden', message: 'The code duel only answers a page served from this machine.' });
+        if (!isLocalRequest(req.headers, duelHosts)) send(res, 403, { error: 'forbidden', message: 'The code duel only answers a page served from this machine, or a host listed in DUEL_HOSTS.' });
         else if (req.method === 'GET' && route === 'cards') send(res, 200, await duel.cards());
         else if (req.method === 'GET' && route === 'state') send(res, 200, duel.state(url.searchParams));
         else if (req.method === 'POST' && ['start', 'go', 'test', 'submit', 'stop', 'check'].includes(route)) send(res, 200, await duel[route](await readJson(req)));

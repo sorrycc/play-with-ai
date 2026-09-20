@@ -114,6 +114,14 @@ describe('duel routes', () => {
     expect(isLocalRequest({ host: '127.0.0.1:5173', origin: 'https://evil.example' })).toBe(false);
     expect(isLocalRequest({ host: 'evil.example:5173', origin: 'http://evil.example:5173' })).toBe(false);
   });
+
+  it('answer a host the deployment listed in DUEL_HOSTS, and still not another site posting to it', () => {
+    const hosts = ['play.example.com'];
+    expect(isLocalRequest({ host: 'play.example.com', origin: 'https://play.example.com' }, hosts)).toBe(true);
+    expect(isLocalRequest({ host: 'Play.Example.com' }, hosts)).toBe(true);
+    expect(isLocalRequest({ host: 'play.example.com', origin: 'https://evil.example' }, hosts)).toBe(false);
+    expect(isLocalRequest({ host: 'other.example.com', origin: 'https://other.example.com' }, hosts)).toBe(false);
+  });
 });
 
 describe('on Windows', () => {

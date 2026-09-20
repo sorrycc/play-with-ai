@@ -283,9 +283,12 @@ export function adjudicate(sides, clocks, limitMs) {
   return null;
 }
 
-/** Only a page this machine serves may use these routes: they write files and run what was written. */
-export function isLocalRequest(headers) {
-  const local = (host) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host || '');
+/**
+ * Only a page this machine serves may use these routes: they write files and run what was written.
+ * `hosts` are the extra names a deployment opted into with DUEL_HOSTS; the origin still has to match.
+ */
+export function isLocalRequest(headers, hosts = []) {
+  const local = (host) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host || '') || hosts.includes((host || '').toLowerCase());
   if (!local(headers.host)) return false;
   if (!headers.origin) return true;
   try {
