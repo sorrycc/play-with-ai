@@ -2,6 +2,7 @@
   "name": "play-with-ai",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "An arcade where AI models, Jev, classic bots, code agents and people play games against each other.",
   "scripts": {

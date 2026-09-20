@@ -38,3 +38,7 @@ illegal move cannot happen. Custom algorithms are model-written, so they run in 
 network and a 1.5 s limit.
 
 Docs: [Internals](docs/internals.md) · [Code duel](docs/code-duel.md) · [Contributing](docs/contributing.md)
+
+## License
+
+[MIT](LICENSE)
