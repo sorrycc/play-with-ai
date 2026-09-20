@@ -4,7 +4,7 @@ import { sfx } from '../../core/sound';
 import type { Player, PlayerConfig } from '../../core/types';
 import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { createPlayer } from '../../players';
-import { Countdown, PlayerBadge, ResultCard, StatsGrid, modelStatRows, resultJingle, type CompareRow, type StatRow } from '../../ui/bits';
+import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { N, type Dir } from './engine';
 import { Match2048, type Options2048, type Side2048 } from './match';
@@ -99,7 +99,7 @@ function SideView({ side, match, keysHint }: { side: Side2048; match: Match2048;
   const won = match.result?.winner === side.index;
   const leading = match.sides[side.index === 0 ? 1 : 0].score < side.score;
   return (
-    <section className="flex w-full max-w-[320px] flex-col gap-3">
+    <section className={`flex w-full max-w-[320px] flex-col gap-3 ${seatMood(match.result, side.index)}`}>
       <PlayerBadge
         player={side.player}
         thinking={side.thinking}
@@ -168,12 +168,6 @@ export function Arena2048({
     return () => clearInterval(id);
   }, []);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [seats[0].kind === 'human', seats[1].kind === 'human']);
-    if (jingle) sfx.play(jingle);
-  }, [result, seats]);
-
   const humans = seats.filter((s) => s.kind === 'human').length;
   useEffect(() => {
     if (!match || humans === 0) return;
@@ -231,12 +225,13 @@ export function Arena2048({
         <SideView side={B} match={match} keysHint={B.human ? hint(1) : null} />
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
+          open={resultOpen}
           detail={t('detail.2048', { clock: formatClock(match.result.elapsedMs), seed: options.seed })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(match)}
           onRematch={onRematch}
           onSetup={onSetup}

@@ -178,6 +178,11 @@ const zh = {
   'result.change': '🎭 换玩家',
   'result.lobby': '🏠 大厅',
   'result.label': '比赛结果',
+  'banner.victory': '胜利！',
+  'banner.defeat': '惜败',
+  'banner.draw': '平局',
+  'banner.wins': '{name} 获胜！',
+  'banner.retry': '不服？再来一局！',
 
   'm.ready': '准备好了。',
   'm.yourMove': '到你了！',
@@ -595,6 +600,11 @@ const en: Record<TextKey, string> = {
   'result.change': '🎭 Change players',
   'result.lobby': '🏠 Lobby',
   'result.label': 'Match result',
+  'banner.victory': 'VICTORY!',
+  'banner.defeat': 'DEFEAT',
+  'banner.draw': 'DRAW',
+  'banner.wins': '{name} WINS!',
+  'banner.retry': 'So close. Run it back?',
 
   'm.ready': 'Ready.',
   'm.yourMove': 'Your move!',

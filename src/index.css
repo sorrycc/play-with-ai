@@ -432,6 +432,158 @@ body {
   animation: confetti-fall var(--t, 3s) cubic-bezier(0.2, 0.6, 0.4, 1) var(--delay, 0s) both;
 }
 
+/* Confetti shot out of a bottom corner: up and outwards fast, then a slow tumble back down. */
+@keyframes confetti-burst {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0) scale(0.4);
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.1, 0.7, 0.3, 1);
+  }
+  45% {
+    transform: translate3d(calc(var(--dx) * 0.75), var(--dy), 0) rotate(calc(var(--rot) * 0.5)) scale(1);
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.5, 0, 0.9, 0.6);
+  }
+  100% {
+    transform: translate3d(var(--dx), 10vh, 0) rotate(var(--rot));
+    opacity: 0;
+  }
+}
+.confetti-burst {
+  top: 100vh;
+  animation: confetti-burst var(--t, 1.8s) linear var(--delay, 0s) both;
+}
+
+/* ---- The ending ---------------------------------------------------------------------------- */
+
+/* The banner's whole life: in fast, hold, out. MatchEnding unmounts it as the fade finishes. */
+@keyframes banner-life {
+  0% {
+    opacity: 0;
+  }
+  8%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.banner {
+  animation: banner-life 1.8s ease-out both;
+}
+/* A defeat drains the colour out of the arena behind it. */
+.banner-lost {
+  background: color-mix(in srgb, var(--color-night) 72%, transparent);
+  backdrop-filter: grayscale(1) blur(2px);
+}
+
+@keyframes banner-slam {
+  0% {
+    transform: scale(3.4) rotate(-14deg);
+    opacity: 0;
+  }
+  45% {
+    transform: scale(0.9) rotate(2deg);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1.06) rotate(-1deg);
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+.banner-slam {
+  animation: banner-slam 0.5s cubic-bezier(0.3, 0, 0.4, 1) both;
+}
+
+/* DEFEAT falls from above, bounces once and stays crooked. */
+@keyframes banner-drop {
+  0% {
+    transform: translateY(-110vh) rotate(-10deg);
+  }
+  45% {
+    transform: translateY(0) rotate(-6deg);
+  }
+  65% {
+    transform: translateY(-22px) rotate(-4deg);
+  }
+  100% {
+    transform: translateY(0) rotate(-5deg);
+  }
+}
+.banner-drop {
+  animation: banner-drop 0.55s cubic-bezier(0.5, 0, 0.8, 0.6) both;
+}
+
+@keyframes rays-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.rays {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200vmax;
+  height: 200vmax;
+  margin: -100vmax 0 0 -100vmax;
+  background: repeating-conic-gradient(color-mix(in srgb, var(--color-sun) 55%, transparent) 0deg 10deg, transparent 10deg 20deg);
+  mask: radial-gradient(circle, #000 0, transparent 38%);
+  -webkit-mask: radial-gradient(circle, #000 0, transparent 38%);
+  animation: rays-spin 14s linear infinite;
+}
+
+@keyframes trophy-bounce {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-6deg);
+  }
+  50% {
+    transform: translateY(-14px) rotate(6deg);
+  }
+}
+.trophy-bounce {
+  animation: trophy-bounce 0.8s ease-in-out infinite;
+}
+.trophy-glow {
+  filter: drop-shadow(0 0 14px var(--color-sun));
+}
+
+/* Seat panels once the match is over: the winner hops and keeps a glow, the loser slumps and greys. */
+@keyframes seat-win {
+  0% {
+    transform: none;
+  }
+  30% {
+    transform: translateY(-14px) scale(1.04);
+  }
+  55% {
+    transform: translateY(0) scale(0.99);
+  }
+  75% {
+    transform: translateY(-5px);
+  }
+  100% {
+    transform: none;
+  }
+}
+.seat-win {
+  animation: seat-win 0.7s ease-in-out 2;
+  filter: drop-shadow(0 0 12px var(--color-sun));
+}
+@keyframes seat-lose {
+  to {
+    transform: translateY(4px) rotate(-1.5deg);
+    filter: grayscale(0.85);
+    opacity: 0.72;
+  }
+}
+.seat-lose {
+  animation: seat-lose 0.6s ease-out 0.2s both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

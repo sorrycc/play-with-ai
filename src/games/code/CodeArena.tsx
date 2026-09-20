@@ -5,7 +5,7 @@ import { i18n, t, type TextKey } from '../../core/i18n';
 import { sfx } from '../../core/sound';
 import { findAgent } from '../../../server/agents.mjs';
 import { createPlayer } from '../../players';
-import { Countdown, Mark, PlayerBadge, ResultCard, StatsGrid, resultJingle, type CompareRow } from '../../ui/bits';
+import { Countdown, Mark, PlayerBadge, MatchEnding, StatsGrid, seatMood, type CompareRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { Editor } from './Editor';
 import { LEVELS, LevelBadge } from './Level';
@@ -150,12 +150,6 @@ export function CodeArena({
     if (lastVerdict) verdictBox.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [lastVerdict]);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [true, false]);
-    if (jingle) sfx.play(jingle);
-  }, [result]);
-
   if (!match) return null;
   const names = Object.keys(match.files);
   const changed = match.changedFiles();
@@ -202,7 +196,7 @@ export function CodeArena({
         <div className="flex min-w-0 flex-col gap-5">
           {card && <TaskCard card={card} />}
 
-          <section className="toy flex min-w-0 flex-col overflow-hidden">
+          <section className={`toy flex min-w-0 flex-col overflow-hidden ${seatMood(match.result, 0) === 'seat-win' ? 'seat-win' : ''}`}>
             <div className="p-4 pb-3">
               <PlayerBadge player={players[0]} thinking={match.human.status === 'verifying'} move={match.human.attempts ? t('code.submitted', { n: match.human.attempts }) : t('code.keys')} tag={<StatusTag status={match.human.status} />} />
             </div>
@@ -239,7 +233,7 @@ export function CodeArena({
           </section>
         </div>
 
-        <section className="toy flex min-w-0 flex-col gap-3 p-4 lg:sticky lg:top-4">
+        <section className={`toy flex min-w-0 flex-col gap-3 p-4 lg:sticky lg:top-4 ${seatMood(match.result, 1)}`}>
           {/* The bubble is what it is doing right now: its latest thought, word or tool call. */}
           <PlayerBadge player={players[1]} thinking={match.agent.status === 'verifying' || (match.agent.status === 'working' && match.log.length === 0)} move={match.log.at(-1)?.text ?? t(STATUS_KEY[match.agent.status])} tag={<StatusTag status={match.agent.status} />} />
           <StatsGrid
@@ -278,12 +272,13 @@ export function CodeArena({
         </section>
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[true, false]}
+          open={resultOpen}
           detail={t('detail.code', { clock: formatClock(match.result.elapsedMs), level: card ? `Lv.${card.level} ${t(LEVELS[card.level].name)}` : '', card: card?.title[i18n.lang] ?? options.card })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(match)}
           onRematch={onRematch}
           onSetup={onSetup}

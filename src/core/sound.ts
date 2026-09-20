@@ -27,6 +27,7 @@ export type SfxName =
   | 'capture'
   | 'check'
   | 'crash'
+  | 'slam'
   | 'win'
   | 'lose'
   | 'draw';
@@ -68,10 +69,15 @@ interface Recipe {
 }
 
 // Notes, for the jingles.
-const C5 = 523.25, E5 = 659.25, G5 = 783.99, A5 = 880, C6 = 1046.5, E6 = 1318.5, G6 = 1568;
+const C5 = 523.25, E5 = 659.25, G5 = 783.99, A5 = 880, C6 = 1046.5, E6 = 1318.5, G6 = 1568, C7 = 2093, E7 = 2637, G7 = 3136;
 
 const arpeggio = (notes: number[], step: number, dur: number, gain: number, type: OscillatorType = 'triangle'): Blip[] =>
   notes.map((freq, i) => ({ type, freq, at: i * step, dur, gain }));
+
+const later = (blips: Blip[], by: number): Blip[] => blips.map((b) => ({ ...b, at: (b.at ?? 0) + by }));
+
+/** A snare roll that swells into whatever comes next. */
+const drumRoll = (hits: number, step: number): Puff[] => Array.from({ length: hits }, (_, i) => ({ at: i * step, dur: 0.05, gain: 0.06 + (0.12 * i) / hits, cutoff: 2600 }));
 
 const RECIPES: Record<SfxName, Recipe> = {
   click: { blips: [{ type: 'triangle', freq: 880, to: 1320, dur: 0.06, gain: 0.18 }] },
@@ -107,15 +113,31 @@ const RECIPES: Record<SfxName, Recipe> = {
   merge: { blips: [{ type: 'triangle', freq: 392, to: 587, dur: 0.1, gain: 0.2 }, { type: 'sine', freq: 784, at: 0.05, dur: 0.1, gain: 0.1 }] },
   crash: { blips: [{ type: 'sawtooth', freq: 220, to: 45, dur: 0.35, gain: 0.22 }], puffs: [{ dur: 0.3, gain: 0.3, cutoff: 1800, cutoffTo: 150 }] },
 
+  // The ending banner landing on the screen.
+  slam: { blips: [{ type: 'sine', freq: 160, to: 45, dur: 0.28, gain: 0.4 }], puffs: [{ dur: 0.18, gain: 0.3, cutoff: 2500, cutoffTo: 200 }] },
+  // A fanfare: drum roll, a run up the chord, the chord held over a cymbal, then a sparkle on top.
   win: {
     blips: [
-      ...arpeggio([C5, E5, G5, C6], 0.11, 0.22, 0.2, 'square'),
-      { type: 'square', freq: C6, at: 0.5, dur: 0.5, gain: 0.16 },
-      { type: 'triangle', freq: E6, at: 0.5, dur: 0.5, gain: 0.14 },
-      { type: 'triangle', freq: G6, at: 0.5, dur: 0.5, gain: 0.1 },
+      ...later(arpeggio([C5, E5, G5, C6], 0.1, 0.2, 0.2, 'square'), 0.45),
+      { type: 'triangle', freq: C5, at: 0.9, dur: 1.2, gain: 0.14 },
+      { type: 'square', freq: C6, at: 0.9, dur: 1.2, gain: 0.14 },
+      { type: 'triangle', freq: E6, at: 0.9, dur: 1.2, gain: 0.12 },
+      { type: 'triangle', freq: G6, at: 0.9, dur: 1.2, gain: 0.1 },
+      ...later(arpeggio([G6, C7, E7, G7, E7, G7], 0.07, 0.14, 0.06, 'sine'), 1.3),
     ],
+    puffs: [...drumRoll(9, 0.05), { at: 0.9, dur: 0.9, gain: 0.16, cutoff: 9000, cutoffTo: 1800 }],
   },
-  lose: { blips: [{ type: 'sawtooth', freq: 311, at: 0, dur: 0.28, gain: 0.14 }, { type: 'sawtooth', freq: 293, at: 0.28, dur: 0.28, gain: 0.14 }, { type: 'sawtooth', freq: 277, at: 0.56, dur: 0.28, gain: 0.14 }, { type: 'sawtooth', freq: 261, to: 233, at: 0.84, dur: 0.7, gain: 0.16 }] },
+  // The sad trombone: three sagging notes, a long slide off the last one, and a rumble under it.
+  lose: {
+    blips: [
+      { type: 'sawtooth', freq: 311, to: 293, at: 0.25, dur: 0.34, gain: 0.14 },
+      { type: 'sawtooth', freq: 293, to: 277, at: 0.6, dur: 0.34, gain: 0.14 },
+      { type: 'sawtooth', freq: 277, to: 261, at: 0.95, dur: 0.34, gain: 0.14 },
+      { type: 'sawtooth', freq: 261, to: 174, at: 1.3, dur: 1.1, gain: 0.16 },
+      { type: 'sine', freq: 87, to: 55, at: 1.3, dur: 1.1, gain: 0.2 },
+    ],
+    puffs: [{ at: 1.3, dur: 1.1, gain: 0.16, cutoff: 420, cutoffTo: 80 }],
+  },
   draw: { blips: [{ type: 'triangle', freq: A5, dur: 0.18, gain: 0.16 }, { type: 'triangle', freq: A5, at: 0.22, dur: 0.3, gain: 0.16 }] },
 };
 

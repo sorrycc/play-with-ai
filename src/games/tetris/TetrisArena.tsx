@@ -4,7 +4,7 @@ import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { t, type TextKey } from '../../core/i18n';
 import { sfx, type SfxName } from '../../core/sound';
 import { createPlayer } from '../../players';
-import { Countdown, PlayerBadge, ResultCard, StatsGrid, modelStatRows, resultJingle, type CompareRow, type StatRow } from '../../ui/bits';
+import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { drawBoard, drawNext } from './draw';
 import { HEIGHT, WIDTH } from './engine';
@@ -140,7 +140,7 @@ function SideView({ side, match, keysHint, shaking }: { side: TetrisSide; match:
   };
 
   return (
-    <section className="flex w-full max-w-[370px] flex-col gap-3">
+    <section className={`flex w-full max-w-[370px] flex-col gap-3 ${seatMood(match.result, side.index)}`}>
       <PlayerBadge
         player={side.player}
         thinking={side.thinking}
@@ -243,12 +243,6 @@ export function TetrisArena({
     if (level > 1) sfx.play('levelup');
   }, [level]);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [seats[0].kind === 'human', seats[1].kind === 'human']);
-    if (jingle) sfx.play(jingle);
-  }, [result, seats]);
-
   useEffect(() => {
     // While the keys are being explained, Space and Enter belong to its start button.
     if (!match || humans === 0 || waiting) return;
@@ -324,12 +318,13 @@ export function TetrisArena({
         <SideView side={R} match={match} keysHint={R.human ? hint(1) : null} shaking={now - R.hitAt < 350} />
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
+          open={resultOpen}
           detail={t('detail.tetris', { clock: formatClock(match.result.elapsedMs), mode, seed: options.seed })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(L, R)}
           onRematch={onRematch}
           onSetup={onSetup}

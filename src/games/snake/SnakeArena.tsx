@@ -4,7 +4,7 @@ import { sfx } from '../../core/sound';
 import type { Player, PlayerConfig } from '../../core/types';
 import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { createPlayer } from '../../players';
-import { Countdown, PlayerBadge, ResultCard, StatsGrid, modelStatRows, resultJingle, type CompareRow, type StatRow } from '../../ui/bits';
+import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { SEAT_COLORS, drawDuel } from './draw';
 import type { Dir } from './engine';
@@ -79,7 +79,7 @@ function SeatPanel({ seat, match, keysHint }: { seat: SnakeSeat; match: SnakeMat
     match.input(seat.index, dir);
   };
   return (
-    <section className="toy flex w-full flex-col gap-3 p-4 lg:w-72">
+    <section className={`toy flex w-full flex-col gap-3 p-4 lg:w-72 ${seatMood(match.result, seat.index)}`}>
       <PlayerBadge
         player={seat.player}
         thinking={seat.thinking}
@@ -168,12 +168,6 @@ export function SnakeArena({
     return () => clearInterval(id);
   }, []);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [seats[0].kind === 'human', seats[1].kind === 'human']);
-    if (jingle) sfx.play(jingle);
-  }, [result, seats]);
-
   const humans = seats.filter((s) => s.kind === 'human').length;
   useEffect(() => {
     if (!match || humans === 0) return;
@@ -235,12 +229,13 @@ export function SnakeArena({
         <SeatPanel seat={B} match={match} keysHint={B.human ? hint(1) : null} />
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
+          open={resultOpen}
           detail={t('detail.snake', { clock: formatClock(match.result.elapsedMs), n: match.state.steps, seed: options.seed })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(match)}
           onRematch={onRematch}
           onSetup={onSetup}

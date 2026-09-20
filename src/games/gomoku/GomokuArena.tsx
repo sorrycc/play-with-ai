@@ -4,7 +4,7 @@ import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { t } from '../../core/i18n';
 import { sfx } from '../../core/sound';
 import { createPlayer } from '../../players';
-import { Countdown, PlayerBadge, ResultCard, StatsGrid, modelStatRows, resultJingle, type CompareRow, type StatRow } from '../../ui/bits';
+import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { BLACK, SIZE, cellId } from './engine';
 import { GomokuMatch, type GomokuOptions, type GomokuSeat } from './match';
@@ -145,7 +145,7 @@ function SeatPanel({ seat, match }: { seat: GomokuSeat; match: GomokuMatch }) {
   const toMove = match.status === 'running' && match.turn === seat.index;
   const won = match.result?.winner === seat.index;
   return (
-    <section className={`toy flex w-full flex-col gap-3 p-4 transition-transform lg:w-72 ${toMove ? '!bg-sun/40 lg:-translate-y-1' : ''}`}>
+    <section className={`toy flex w-full flex-col gap-3 p-4 transition-transform lg:w-72 ${toMove ? '!bg-sun/40 lg:-translate-y-1' : ''} ${seatMood(match.result, seat.index)}`}>
       <PlayerBadge
         player={seat.player}
         thinking={seat.thinking}
@@ -198,12 +198,6 @@ export function GomokuArena({
     return () => clearInterval(id);
   }, []);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [seats[0].kind === 'human', seats[1].kind === 'human']);
-    if (jingle) sfx.play(jingle);
-  }, [result, seats]);
-
   if (!match) return null;
   const [A, B] = match.seats;
 
@@ -237,12 +231,13 @@ export function GomokuArena({
         <SeatPanel seat={B} match={match} />
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
+          open={resultOpen}
           detail={t('detail.gomoku', { clock: formatClock(match.result.elapsedMs), n: match.history.length })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(A, B)}
           onRematch={onRematch}
           onSetup={onSetup}

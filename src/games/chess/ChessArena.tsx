@@ -4,7 +4,7 @@ import { sfx } from '../../core/sound';
 import type { Player, PlayerConfig } from '../../core/types';
 import { fmtMs, fmtUsd, formatClock } from '../../core/types';
 import { createPlayer } from '../../players';
-import { Countdown, PlayerBadge, ResultCard, StatsGrid, modelStatRows, resultJingle, type CompareRow, type StatRow } from '../../ui/bits';
+import { Countdown, PlayerBadge, MatchEnding, StatsGrid, modelStatRows, seatMood, type CompareRow, type StatRow } from '../../ui/bits';
 import { useMatch } from '../../ui/useMatch';
 import { type Piece, type Promotion, colOf, colorOf, inCheck, kingSquare, materialBalance, moveId, rowOf, squareName } from './engine';
 import { ChessMatch, type ChessOptions, type ChessSeat, type PlayedMove } from './match';
@@ -205,7 +205,7 @@ function SeatPanel({ seat, match }: { seat: ChessSeat; match: ChessMatch }) {
   const won = match.result?.winner === seat.index;
   const lead = materialBalance(match.state.board) * (seat.color === 'w' ? 1 : -1);
   return (
-    <section className={`toy flex w-full flex-col gap-3 p-4 transition-transform lg:w-72 ${toMove ? '!bg-sun/40 lg:-translate-y-1' : ''}`}>
+    <section className={`toy flex w-full flex-col gap-3 p-4 transition-transform lg:w-72 ${toMove ? '!bg-sun/40 lg:-translate-y-1' : ''} ${seatMood(match.result, seat.index)}`}>
       <PlayerBadge
         player={seat.player}
         thinking={seat.thinking}
@@ -294,12 +294,6 @@ export function ChessArena({
     return () => clearInterval(id);
   }, []);
 
-  const result = match?.result ?? null;
-  useEffect(() => {
-    const jingle = result && resultJingle(result, [seats[0].kind === 'human', seats[1].kind === 'human']);
-    if (jingle) sfx.play(jingle);
-  }, [result, seats]);
-
   if (!match) return null;
   const [A, B] = match.seats;
   // A person playing Black alone sees the board from Black's side.
@@ -343,12 +337,13 @@ export function ChessArena({
         <SeatPanel seat={B} match={match} />
       </div>
 
-      {match.result && resultOpen && (
-        <ResultCard
-          headline={match.result.reason}
+      {match.result && (
+        <MatchEnding
+          result={match.result}
+          humans={[seats[0].kind === 'human', seats[1].kind === 'human']}
+          open={resultOpen}
           detail={t('detail.chess', { clock: formatClock(match.result.elapsedMs), n: Math.ceil(match.history.length / 2) })}
           players={players}
-          winner={match.result.winner}
           rows={compareRows(match)}
           onRematch={onRematch}
           onSetup={onSetup}
