@@ -91,9 +91,10 @@ function shortName(model: string): string {
 export function createLlmPlayer(config: PlayerConfig): Player {
   const model = config.model?.trim() || DEFAULT_MODEL;
   const thinking = config.thinking === true;
+  const effort = config.effort ?? 'medium';
   return {
     config: { ...config, model },
-    name: `${shortName(model)}${thinking ? t('llm.thinkingSuffix') : ''}`,
+    name: `${shortName(model)}${thinking ? t('llm.thinkingSuffix', { effort: t(`effort.${effort}`) }) : ''}`,
     short: shortName(model),
     emoji: '🤖',
     color: modelColor(model),
@@ -102,7 +103,7 @@ export function createLlmPlayer(config: PlayerConfig): Player {
       const res = await fetch('/api/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, thinking, messages: buildMessages(req), optionIds: req.options.map((o) => o.id) }),
+        body: JSON.stringify({ model, thinking, effort, messages: buildMessages(req), optionIds: req.options.map((o) => o.id) }),
         signal,
       });
       const latencyMs = performance.now() - started;

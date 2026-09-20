@@ -52,7 +52,9 @@ position.
 How a model is asked matters. Probed through this proxy: in JSON mode Claude Haiku ignored the
 format and wrote 400 tokens of prose (4.4 s); with a forced function call it answers in 1.5 s.
 DeepSeek and Qwen reject a forced call while thinking, so thinking uses JSON mode, which is also
-the retry when a model rejects the call. A plain-text reply counts only if it names exactly one
+the retry when a model rejects the call. Thinking has three effort levels (low, medium, high), sent
+as `reasoning.effort`. Claude Haiku thinks longer with each level, Qwen gets 20%, 50% or 80% of the
+token cap to think in, and DeepSeek ignores the level. A plain-text reply counts only if it names exactly one
 option: prose that weighs several is ambiguous, and a fallback to the classic bot beats a guess.
 
 ## Which models are offered

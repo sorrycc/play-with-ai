@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { t, type TextKey } from '../core/i18n';
-import type { DecisionGameId, PlayerConfig, PlayerKind } from '../core/types';
+import { EFFORTS } from '../core/types';
+import type { DecisionGameId, Effort, PlayerConfig, PlayerKind } from '../core/types';
 import { ROLES } from '../players';
 import { algos } from '../players/algos';
 import { AlgoPanel, algoForSeat } from './AlgoPanel';
@@ -150,8 +151,18 @@ function SeatCard({
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-mono opacity-70">{info ? t('setup.price', { in: info.inputPrice, out: info.outputPrice }) : models.length ? t('setup.unknownModel') : ''}</span>
             <label className="flex cursor-pointer items-center gap-1.5 font-semibold" title={t('setup.thinkingTitle')}>
-              <input type="checkbox" className="size-4 accent-[var(--color-grape)]" checked={seat.thinking === true} onChange={(e) => onChange({ ...seat, thinking: e.target.checked })} />
               {t('setup.thinking')}
+              <select
+                className="field w-auto! px-2! py-0.5! text-xs!"
+                value={seat.thinking === true ? (seat.effort ?? 'medium') : 'off'}
+                onChange={(e) => onChange(e.target.value === 'off' ? { ...seat, thinking: false } : { ...seat, thinking: true, effort: e.target.value as Effort })}
+              >
+                {(['off', ...EFFORTS] as const).map((level) => (
+                  <option key={level} value={level}>
+                    {t(`effort.${level}`)}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
         </div>

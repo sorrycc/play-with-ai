@@ -55,12 +55,17 @@ export interface Decision {
   note: string;
 }
 
+export const EFFORTS = ['low', 'medium', 'high'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 export interface PlayerConfig {
   kind: PlayerKind;
   /** ZenMux model id, for kind 'llm'. */
   model?: string;
   /** Let a reasoning model think before answering: smarter and much slower. */
   thinking?: boolean;
+  /** How hard it thinks, when thinking is on. Unset means medium. */
+  effort?: Effort;
   /** A saved generated algorithm, for kind 'custom'. */
   algoId?: string;
   /** Which code agent, for kind 'agent': an id from server/agents.mjs. */

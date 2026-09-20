@@ -22,6 +22,7 @@ const MODEL_ID = /^[\w.-]+\/[\w.:-]+$/;
 const OPTION_ID = /^[\w.-]{1,24}$/;
 // A chess position can have up to 218 legal moves.
 const MAX_OPTIONS = 220;
+const EFFORTS = ['low', 'medium', 'high'];
 
 function send(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
@@ -97,6 +98,7 @@ export function createApi(env) {
       return send(res, 400, { error: 'bad_request', message: 'messages required' });
     }
     const thinking = body.thinking === true;
+    const effort = EFFORTS.includes(body.effort) ? body.effort : 'medium';
     const optionIds = Array.isArray(body.optionIds) ? body.optionIds : [];
     if (optionIds.length > MAX_OPTIONS || optionIds.some((id) => typeof id !== 'string' || !OPTION_ID.test(id))) {
       return send(res, 400, { error: 'bad_request', message: 'optionIds must be short id strings' });
@@ -114,7 +116,11 @@ export function createApi(env) {
     //
     // The token cap leaves room for Gemini, which cannot switch thinking off: at 120 tokens it ran
     // out before writing an answer.
-    const base = { model: body.model, messages: body.messages, temperature: typeof body.temperature === 'number' ? body.temperature : 0.2, reasoning: { enabled: thinking } };
+    //
+    // Effort, probed 2026-09-20 on the three models the picker offers: Claude Haiku thinks longer
+    // with each level, Qwen gets exactly 20%, 50% or 80% of the cap to think in, and DeepSeek
+    // ignores both the level and the cap.
+    const base = { model: body.model, messages: body.messages, temperature: typeof body.temperature === 'number' ? body.temperature : 0.2, reasoning: thinking ? { enabled: true, effort } : { enabled: false } };
     const asJson = { ...base, max_tokens: thinking ? 4000 : 800, response_format: { type: 'json_object' } };
     const asCall = {
       ...base,
