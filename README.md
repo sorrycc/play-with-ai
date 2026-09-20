@@ -6,20 +6,38 @@ friend. The code duel is you against a code agent's CLI.
 
 Games so far:
 
-- **Tetris**: a real-time duel. Same piece sequence, same clock. Cleared lines land on the other
-  board as garbage, and a piece keeps falling while its player thinks, so latency is part of the game.
-- **五子棋 Gomoku**: 15×15, five in a row wins. Turn-based, so only judgment counts.
+- **Tetris**: a real-time duel. Same piece sequence, same clock. Clearing several rows at once
+  lands garbage on the other board (the guideline table: a single sends nothing, a Tetris sends
+  four), and rows you clear cancel garbage waiting for you, so attacking and defending are the same
+  move. Both sides see three pieces ahead and can hold one; a piece can be slid or turned under an
+  overhang, so every legal placement is on offer, not only the straight drops. A piece keeps falling
+  while its player thinks, so latency is part of the game — and an answer that arrives after the
+  piece has locked is still counted and still billed.
+- **五子棋 Gomoku**: 15×15, five in a row wins. Turn-based, so only judgment counts. 225 cells is
+  too many to describe, so code offers about twenty; every winning move, every forced block and
+  every fork on either side is always among them, so the pruning never decides a game. Black opens
+  on one of nine points rather than always the centre, a rematch swaps the colours, and a person
+  gets the move list and a take-back.
 - **贪吃蛇 Snake**: two snakes on one shared grid, moving at the same instant. Meet head-on and both
   die — and then the longer one wins, which is also how the clock settles it, so length is the
   score. Halfway through, the walls start closing in. Every step has a deadline: no answer, and the
   snake goes straight.
 - **2048**: a race. Two boards, one opening, each seat sliding as fast as it answers, so a quick
-  thinker simply gets more moves.
-- **国际象棋 Chess**: the full rules, down to threefold repetition and insufficient material. A move
-  limit adjudicates on material, because AI games often never reach a mate.
-- **中国象棋 Xiangqi**: the full rules, in traditional notation (炮二平五). Repetition is simply a
-  draw: the tournament rules on perpetual check need a judgment of intent and are not implemented.
-- **代码对决 Code Duel**: you against Qoder CLI. One task card at three levels. You write in an
+  thinker simply gets more moves. Each side sees the other's score, the gap and the seconds left, so
+  it can tell when to gamble. When the clock runs out the higher score wins; an equal score goes to
+  the bigger tile, and an equal tile to whoever needed fewer moves, because one seed and one pace
+  otherwise make a mirror match a guaranteed draw. Same-moves mode drops the race and compares
+  judgement alone, the way lockstep does in Tetris and Snake.
+- **国际象棋 Chess**: the full rules, down to threefold repetition and dead positions. A person can
+  resign or offer a draw, the position copies out as a FEN and the game as a PGN, and a move limit
+  adjudicates on the evaluation, because AI games often never reach a mate. The classic bot deepens
+  under a time budget and mates with a lone queen or rook rather than shuffling into the fifty-move
+  rule.
+- **中国象棋 Xiangqi**: the full rules, in traditional notation (炮二平五, 前车进一, 三兵平四).
+  A repetition is a draw, except when one side gave check on every move of it: that is 长将, and it
+  loses. The classic bot opens from a book and then deepens under a time budget; the move list is
+  clickable, so any position in the game goes back on the board.
+- **代码对决 Code Duel**: you against Qoder CLI. Ten task cards at three levels. You write in an
   editor on the page, the agent works unattended on the server, and whoever first passes the card's
   hidden acceptance test wins. Give it a head start if that is too easy, or take the card on your
   own in practice mode, which needs no agent installed.
@@ -69,7 +87,7 @@ code to the proxy: as it stands, anyone who can reach `/api/llm` spends your Zen
 | 🤖 AI model | Gets the state and the described options, and answers through a forced function call whose argument is an enum of the legal option ids. Any ZenMux model id works; "Thinking" lets a reasoning model think first: smarter, and several times slower. |
 | ⚡ Jev | One typed Choice question over the same options; returns calibrated probabilities. |
 | 🧑‍🚀 You | Keyboard or touch in Tetris, Snake and 2048 (swipe works too), clicks in Gomoku, Chess and Xiangqi. Two people can share a keyboard: WASD and arrows. |
-| 🧮 Classic bot | Hand-written algorithm, no API: a linear board evaluation in Tetris, threat scoring in Gomoku, flood fill plus shortest way to the food in Snake, expectimax in 2048, alpha-beta with a quiescence search in Chess and Xiangqi. |
+| 🧮 Classic bot | Hand-written algorithm, no API: a linear board evaluation in Tetris, played out one piece deeper over the piece it already knows is coming (which roughly doubles how long it lasts under garbage), threat scoring plus a win-by-continuous-fours search in Gomoku, flood fill plus the shortest open way to the food in Snake, over a one-step look at every answer the other snake could give, expectimax in 2048, a second ply deep once the board is crowded enough to afford it (a sixth more score, and 2048 in seven games out of twelve rather than five), alpha-beta with a quiescence search in Chess and Xiangqi, deepened one ply at a time under a time budget. |
 | ✨ Custom algorithm | You describe how it should play, a model writes a `choose(game)` function once, and from then on it plays locally: no API call, no latency, no cost during a match. |
 | 🐒 Chaos monkey | A random legal move. A baseline. |
 | 👾 Code agent | Only in the code duel. The server runs a code agent's CLI headless in a copy of the repository. |
