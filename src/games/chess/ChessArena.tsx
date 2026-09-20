@@ -106,6 +106,8 @@ function Board({ match, flipped }: { match: ChessMatch; flipped: boolean }) {
     if (selected !== null) setSelected(null);
     if (promoting) setPromoting(null);
   }
+  // Nor does a half-finished promotion survive the end of the match.
+  if (promoting && !canMove) setPromoting(null);
 
   const targets = useMemo(() => new Set(selected === null ? [] : legal.filter((m) => m.from === selected).map((m) => m.to)), [legal, selected]);
 
@@ -134,6 +136,7 @@ function Board({ match, flipped }: { match: ChessMatch; flipped: boolean }) {
           // A piece that just arrived here, and the square it came from: the king or, when castling, the rook.
           const cameFrom = last?.to === sq ? last.from : last?.rook?.to === sq ? last.rook.from : null;
           const taken = last?.capturedAt === sq ? last.captured : null;
+          const promoted = last?.to === sq && last.promotion !== null && piece !== null;
           return (
             <button
               key={sq}
@@ -155,10 +158,16 @@ function Board({ match, flipped }: { match: ChessMatch; flipped: boolean }) {
                 // Fills the square, so the slide can be written in squares; re-keyed per move so it runs once.
                 <span
                   key={cameFrom !== null ? `moved-${ply}` : 'still'}
-                  className={`pointer-events-none absolute inset-0 grid place-items-center leading-none text-ink ${cameFrom !== null ? 'piece-slide' : ''}`}
+                  className={`pointer-events-none absolute inset-0 grid place-items-center leading-none text-ink ${cameFrom !== null ? 'piece-slide' : ''} ${promoted ? 'piece-promote-out' : ''}`}
                   style={cameFrom !== null ? { ...pieceStyle, ...slideFrom(cameFrom, sq, flipped) } : pieceStyle}
                 >
-                  {glyph(piece)}
+                  {/* A promoting pawn travels as a pawn and only then becomes its new piece. */}
+                  {glyph(promoted ? last.piece : piece)}
+                </span>
+              )}
+              {promoted && (
+                <span key={`promoted-${ply}`} className="piece-promote-in pointer-events-none absolute inset-0 grid place-items-center leading-none text-ink" style={pieceStyle}>
+                  {glyph(piece!)}
                 </span>
               )}
               {last?.to === sq && <span key={`ping-${ply}`} className={`square-ping pointer-events-none absolute inset-0 rounded-full border-4 ${last.captured ? 'border-pink' : 'border-grape'}`} />}
@@ -184,10 +193,49 @@ function Board({ match, flipped }: { match: ChessMatch; flipped: boolean }) {
                 </button>
               ))}
             </div>
+            <button className="btn bg-white !px-3 !py-0.5 text-xs" onClick={() => setPromoting(null)}>
+              {t('c.promoteCancel')}
+            </button>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** How the material stands, as one bar: white grows from the left, black from the right. */
+function MaterialBar({ balance }: { balance: number }) {
+  // Ten points ahead is the whole bar; more than that the game is long decided anyway.
+  const share = 50 + Math.max(-10, Math.min(10, balance)) * 5;
+  const label = balance === 0 ? '=' : balance > 0 ? `+${balance}` : String(balance);
+  return (
+    <div className="flex w-full items-center gap-2" title={t('c.material')}>
+      <span className="font-mono text-xs opacity-60">{t('c.material')}</span>
+      <div className="relative h-3 flex-1 overflow-hidden rounded-full border-2 border-ink bg-night">
+        <div className="h-full bg-white transition-[width] duration-500" style={{ width: `${share}%` }} />
+      </div>
+      <span className="w-8 text-right font-mono text-xs font-bold">{label}</span>
+    </div>
+  );
+}
+
+/** Copies a line of text and says so for a moment. */
+function CopyButton({ label, text }: { label: string; text: () => string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const id = setTimeout(() => setDone(false), 1200);
+    return () => clearTimeout(id);
+  }, [done]);
+  return (
+    <button
+      className="btn bg-white !px-2 !py-0.5 text-xs"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text()).then(() => setDone(true));
+      }}
+    >
+      {done ? t('c.copied') : label}
+    </button>
   );
 }
 
@@ -298,6 +346,8 @@ export function ChessArena({
   const [A, B] = match.seats;
   // A person playing Black alone sees the board from Black's side.
   const flipped = seats[1].kind === 'human' && seats[0].kind !== 'human';
+  // Resigning and offering a draw belong to the person at the board; when two share it, to the one to move.
+  const human: 0 | 1 | null = seats[0].kind === 'human' && seats[1].kind === 'human' ? match.turnSeat.index : seats[0].kind === 'human' ? 0 : seats[1].kind === 'human' ? 1 : null;
   const fullMove = Math.floor(match.history.length / 2) + (match.status === 'done' ? 0 : 1);
 
   return (
@@ -310,6 +360,10 @@ export function ChessArena({
           {options.maxMoves > 0 && <span className="opacity-50"> / {options.maxMoves}</span>}
         </span>
         {match.status === 'running' && inCheck(match.state) && <span className="toy-sm pop-in !bg-pink px-3 py-1 text-sm font-bold text-white">{t('c.check')}</span>}
+        {match.status === 'running' && match.repetition >= 2 && <span className="toy-sm px-3 py-1 text-sm font-bold">{t('c.repeated', { n: match.repetition })}</span>}
+        {match.status === 'running' && match.state.halfmove >= 80 && (
+          <span className="toy-sm px-3 py-1 text-sm font-bold">{t('c.fiftyLeft', { n: Math.ceil((100 - match.state.halfmove) / 2) })}</span>
+        )}
         {match.status !== 'done' ? (
           <button className="btn bg-pink !py-1.5 text-sm text-white" onClick={() => match.stop()}>
             {t('arena.stop')}
@@ -332,7 +386,24 @@ export function ChessArena({
         <div className="flex w-full min-w-0 flex-col items-center gap-3" style={{ maxWidth: 560 }}>
           <LastMove move={match.history[match.history.length - 1]} />
           <Board match={match} flipped={flipped} />
+          <MaterialBar balance={materialBalance(match.state.board)} />
           <MoveList match={match} />
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <CopyButton label={t('c.copyFen')} text={() => match.fen()} />
+            <CopyButton label={t('c.copyPgn')} text={() => match.pgn()} />
+            {human !== null && match.status === 'running' && (
+              <>
+                <button className="btn bg-white !px-2 !py-0.5 text-xs" onClick={() => window.confirm(t('c.resignConfirm')) && match.resign(human)}>
+                  {t('c.resign')}
+                </button>
+                <button className="btn bg-white !px-2 !py-0.5 text-xs" onClick={() => match.offerDraw(human)}>
+                  {t(match.drawOffer !== null && match.drawOffer !== human ? 'c.acceptDraw' : 'c.offerDraw')}
+                </button>
+              </>
+            )}
+            {match.drawOffer !== null && <span className="text-xs font-semibold opacity-70">{t('c.drawOffered', { name: match.seats[match.drawOffer].player.name })}</span>}
+            {match.drawDeclined && <span className="text-xs font-semibold opacity-70">{t('c.drawDeclined')}</span>}
+          </div>
         </div>
         <SeatPanel seat={B} match={match} />
       </div>

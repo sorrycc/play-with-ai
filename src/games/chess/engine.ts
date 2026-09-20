@@ -65,10 +65,53 @@ export function fromFen(fen: string): ChessState {
 
 export const startState = (): ChessState => fromFen(START_FEN);
 
-/** Identifies a position for repetition: placement, side to move, castling rights and en passant square. */
+export function toFen(s: ChessState): string {
+  let placement = '';
+  for (let r = 0; r < 8; r++) {
+    let empty = 0;
+    for (let c = 0; c < 8; c++) {
+      const p = s.board[r * 8 + c];
+      if (!p) empty += 1;
+      else {
+        placement += (empty || '') + p;
+        empty = 0;
+      }
+    }
+    placement += (empty || '') + (r < 7 ? '/' : '');
+  }
+  const c = s.castling;
+  const rights = `${c.K ? 'K' : ''}${c.Q ? 'Q' : ''}${c.k ? 'k' : ''}${c.q ? 'q' : ''}` || '-';
+  return `${placement} ${s.turn} ${rights} ${s.ep === null ? '-' : squareName(s.ep)} ${s.halfmove} ${s.fullmove}`;
+}
+
+/**
+ * Identifies a position for repetition: placement, side to move, castling rights and the en passant
+ * square — but only when a pawn may really take there. Two positions that differ solely by a square
+ * nobody can use are the same position under the rules, so counting them apart would hide a draw.
+ */
 export function positionKey(s: ChessState): string {
   const c = s.castling;
-  return `${s.board.map((p) => p ?? '.').join('')}${s.turn}${c.K ? 'K' : ''}${c.Q ? 'Q' : ''}${c.k ? 'k' : ''}${c.q ? 'q' : ''}${s.ep ?? '-'}`;
+  const ep = epCapturePossible(s) ? s.ep : '-';
+  return `${s.board.map((p) => p ?? '.').join('')}${s.turn}${c.K ? 'K' : ''}${c.Q ? 'Q' : ''}${c.k ? 'k' : ''}${c.q ? 'q' : ''}${ep}`;
+}
+
+/** Is there a legal en passant capture in this position? */
+export function epCapturePossible(s: ChessState): boolean {
+  if (s.ep === null) return false;
+  const white = s.turn === 'w';
+  // The capturing pawn stands beside the square it takes on, one rank further from the target.
+  const r = rowOf(s.ep) + (white ? 1 : -1);
+  const c = colOf(s.ep);
+  const pawn = (white ? 'P' : 'p') as Piece;
+  for (const dc of [-1, 1]) {
+    if (!inside(r, c + dc)) continue;
+    const from = r * 8 + c + dc;
+    if (s.board[from] !== pawn) continue;
+    const move: Move = { from, to: s.ep, piece: pawn, captured: (white ? 'p' : 'P') as Piece, promotion: null, flag: 'ep' };
+    const after = makeMove(s, move);
+    if (!isAttacked(after.board, kingSquare(after.board, s.turn), after.turn)) return true;
+  }
+  return false;
 }
 
 const KNIGHT: [number, number][] = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
@@ -243,15 +286,27 @@ export function perft(s: ChessState, depth: number): number {
 /** Coordinate notation, e.g. e2e4 or e7e8q: unambiguous, so it is what players are asked to pick. */
 export const moveId = (m: Move): string => `${squareName(m.from)}${squareName(m.to)}${m.promotion ?? ''}`;
 
-/** Neither side can possibly mate: bare kings, or a single knight or bishop on the board. */
+/**
+ * A dead position: no series of legal moves can mate. Bare kings, a single knight or bishop, or
+ * bishops that all stand on one colour of square — those can never cover the squares a mate needs.
+ * Two knights are not here: a mate is unreachable by force but not impossible, so the rules let the
+ * game go on.
+ */
 export function insufficientMaterial(board: (Piece | null)[]): boolean {
-  let minors = 0;
-  for (const p of board) {
+  let knights = 0;
+  let bishops = 0;
+  let squares = 0;
+  for (let sq = 0; sq < 64; sq++) {
+    const p = board[sq];
     if (!p || typeOf(p) === 'k') continue;
-    if (typeOf(p) === 'n' || typeOf(p) === 'b') minors += 1;
-    else return false;
+    if (typeOf(p) === 'n') knights += 1;
+    else if (typeOf(p) === 'b') {
+      bishops += 1;
+      squares |= 1 << ((rowOf(sq) + colOf(sq)) & 1);
+    } else return false;
   }
-  return minors <= 1;
+  if (knights + bishops <= 1) return true;
+  return knights === 0 && squares !== 0b11;
 }
 
 export type Outcome = { kind: 'checkmate'; winner: Color } | { kind: 'stalemate' | 'fifty' | 'material' } | null;
@@ -263,8 +318,12 @@ export function outcome(s: ChessState, moves: Move[] = legalMoves(s)): Outcome {
   return null;
 }
 
-/** Standard algebraic notation, e.g. Nf3, exd5, O-O, e8=Q+, Qxf7#. `legal` are the moves of this position. */
-export function toSan(s: ChessState, m: Move, legal: Move[] = legalMoves(s)): string {
+/**
+ * Standard algebraic notation, e.g. Nf3, exd5, O-O, e8=Q+, Qxf7#. `legal` are the moves of this
+ * position; `played` is the position after the move and its replies, which a caller that has
+ * already worked them out passes in rather than paying for them twice.
+ */
+export function toSan(s: ChessState, m: Move, legal: Move[] = legalMoves(s), played?: { after: ChessState; replies: Move[] }): string {
   let san: string;
   if (m.flag === 'castleK') san = 'O-O';
   else if (m.flag === 'castleQ') san = 'O-O-O';
@@ -285,8 +344,8 @@ export function toSan(s: ChessState, m: Move, legal: Move[] = legalMoves(s)): st
       san = type.toUpperCase() + which + (m.captured ? 'x' : '') + target;
     }
   }
-  const after = makeMove(s, m);
-  if (inCheck(after)) san += legalMoves(after).length === 0 ? '#' : '+';
+  const after = played?.after ?? makeMove(s, m);
+  if (inCheck(after)) san += (played?.replies ?? legalMoves(after)).length === 0 ? '#' : '+';
   return san;
 }
 
@@ -315,14 +374,23 @@ function squareBonus(type: PieceType, row: number, col: number, endgame: boolean
   }
 }
 
+/** Steps from the middle four squares, counted along the ranks and files: 0 in the centre, 6 in a corner. */
+const fromCentre = (sq: number) => Math.max(3 - rowOf(sq), rowOf(sq) - 4, 0) + Math.max(3 - colOf(sq), colOf(sq) - 4, 0);
+/** The same count between two squares, which has finer steps than king moves and so fewer ties. */
+const between = (a: number, b: number) => Math.abs(rowOf(a) - rowOf(b)) + Math.abs(colOf(a) - colOf(b));
+
 /** Static evaluation in centipawns, from white's point of view. */
 export function evaluate(s: ChessState): number {
   let queens = 0;
   let minorsAndRooks = 0;
+  // A side with nothing but its king is mated on an edge, so those endings need their own rule.
+  const force = { w: 0, b: 0 };
   for (const p of s.board) {
     if (!p) continue;
-    if (typeOf(p) === 'q') queens += 1;
-    else if (typeOf(p) !== 'p' && typeOf(p) !== 'k') minorsAndRooks += 1;
+    const type = typeOf(p);
+    if (type !== 'k') force[colorOf(p)] += VALUE[type];
+    if (type === 'q') queens += 1;
+    else if (type !== 'p' && type !== 'k') minorsAndRooks += 1;
   }
   const endgame = queens === 0 || minorsAndRooks <= 2;
   let score = 0;
@@ -333,6 +401,15 @@ export function evaluate(s: ChessState): number {
     const row = white ? rowOf(sq) : 7 - rowOf(sq);
     const value = VALUE[typeOf(p)] + squareBonus(typeOf(p), row, colOf(sq), endgame);
     score += white ? value : -value;
+  }
+  // Against a bare king, drive it to the edge and walk the other king up: without this the search
+  // shuffles a winning queen or rook about until the fifty-move rule takes the win away.
+  const bare = force.w === 0 ? 'w' : force.b === 0 ? 'b' : null;
+  if (bare && force[opposite(bare)] >= VALUE.r) {
+    const weak = kingSquare(s.board, bare);
+    const strong = kingSquare(s.board, opposite(bare));
+    const drive = 20 * fromCentre(weak) + 8 * (14 - between(weak, strong));
+    score += bare === 'b' ? drive : -drive;
   }
   return score;
 }
@@ -345,50 +422,234 @@ export function materialBalance(board: (Piece | null)[]): number {
 }
 
 const MATE = 100_000;
-const orderScore = (m: Move) => (m.captured ? 10 * VALUE[typeOf(m.captured)] - VALUE[typeOf(m.piece)] : 0) + (m.promotion ? 800 : 0);
+/** Above this a score is a forced mate, and the distance to it is what is left. */
+const MATE_IN = MATE - 1000;
 
-/** Captures only, until the position is quiet, so the search does not stop in the middle of an exchange. */
-function quiesce(s: ChessState, alpha: number, beta: number, depth: number): number {
+// ---- Zobrist keys ---------------------------------------------------------------------------------
+//
+// One number per position, so the search can recognise a position it has already worked out. Two
+// independent 32-bit draws are packed into one double: a collision would need both to match.
+
+const PIECES = 'PNBRQKpnbrqk';
+const ZOBRIST = (() => {
+  // A fixed seed, so two runs of the same search behave the same.
+  let a = 0x9e3779b9;
+  const next = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (t ^ (t >>> 14)) | 0;
+  };
+  const table = (n: number) => Int32Array.from({ length: n }, next);
+  return { pieces: table(12 * 64), turn: next(), castling: table(16), ep: table(8) };
+})();
+
+/** A cheap number that stands for a position, for the transposition table and for repetitions. */
+export function searchKey(s: ChessState): number {
+  let a = 0;
+  let b = 0;
+  for (let sq = 0; sq < 64; sq++) {
+    const p = s.board[sq];
+    if (!p) continue;
+    const i = PIECES.indexOf(p) * 64 + sq;
+    a ^= ZOBRIST.pieces[i];
+    b = (Math.imul(b ^ ZOBRIST.pieces[i], 0x85ebca6b) + sq) | 0;
+  }
+  const c = s.castling;
+  const rights = (c.K ? 1 : 0) | (c.Q ? 2 : 0) | (c.k ? 4 : 0) | (c.q ? 8 : 0);
+  a ^= ZOBRIST.castling[rights];
+  b ^= ZOBRIST.castling[rights];
+  if (s.ep !== null) {
+    a ^= ZOBRIST.ep[colOf(s.ep)];
+    b ^= ZOBRIST.ep[colOf(s.ep)];
+  }
+  if (s.turn === 'b') {
+    a ^= ZOBRIST.turn;
+    b ^= ZOBRIST.turn;
+  }
+  return (a >>> 0) * 65536 + (b >>> 16);
+}
+
+// ---- The classic bot ------------------------------------------------------------------------------
+
+const EXACT = 0;
+const LOWER = 1;
+const UPPER = 2;
+interface Entry {
+  depth: number;
+  score: number;
+  flag: typeof EXACT | typeof LOWER | typeof UPPER;
+  /** The best move here, as from * 64 + to: searched first next time. */
+  best: number;
+}
+
+/** What one search carries: the table, the ordering it learned, its clock and the game so far. */
+const table = new Map<number, Entry>();
+const history = new Int32Array(64 * 64);
+let killers: Int32Array = new Int32Array(0);
+let repeated = new Map<number, number>();
+let deadline = 0;
+let nodes = 0;
+let stopped = false;
+
+const slot = (m: Move) => m.from * 64 + m.to;
+
+/** Captures first, then the move that cut this position off before, then whatever worked elsewhere. */
+function order(moves: Move[], best: number, ply: number): void {
+  const score = (m: Move) => {
+    if (slot(m) === best) return 1e9;
+    let v = 0;
+    if (m.captured) v += 1e6 + 10 * VALUE[typeOf(m.captured)] - VALUE[typeOf(m.piece)];
+    if (m.promotion) v += 1e6 + VALUE[m.promotion];
+    if (v === 0) {
+      if (slot(m) === killers[ply * 2] || slot(m) === killers[ply * 2 + 1]) v = 5e5;
+      else v = history[slot(m)];
+    }
+    return v;
+  };
+  moves.sort((a, b) => score(b) - score(a));
+}
+
+/** Captures and promotions until the position is quiet — and, in check, every way out of it. */
+function quiesce(s: ChessState, alpha: number, beta: number, depth: number, ply: number): number {
+  const moves = legalMoves(s);
+  const checked = inCheck(s);
+  // Mate and stalemate are exact at any depth: a leaf must never score a mated king as material.
+  if (moves.length === 0) return checked ? -MATE + ply : 0;
   const stand = evaluate(s) * (s.turn === 'w' ? 1 : -1);
-  if (depth === 0 || stand >= beta) return stand;
-  alpha = Math.max(alpha, stand);
-  const captures = legalMoves(s).filter((m) => m.captured || m.promotion).sort((a, b) => orderScore(b) - orderScore(a));
-  for (const m of captures) {
-    const score = -quiesce(makeMove(s, m), -beta, -alpha, depth - 1);
+  if (depth === 0) return stand;
+  // A king under attack is not a quiet position, so standing pat there would be a lie.
+  if (!checked) {
+    if (stand >= beta) return stand;
+    alpha = Math.max(alpha, stand);
+  }
+  const candidates = checked ? moves : moves.filter((m) => m.captured || m.promotion);
+  if (candidates.length === 0) return stand;
+  order(candidates, 0, ply);
+  let best = checked ? -MATE : stand;
+  for (const m of candidates) {
+    const score = -quiesce(makeMove(s, m), -beta, -alpha, depth - 1, ply + 1);
+    if (score > best) best = score;
     if (score >= beta) return score;
     alpha = Math.max(alpha, score);
   }
-  return alpha;
+  return best;
 }
 
-function negamax(s: ChessState, depth: number, alpha: number, beta: number, ply: number): number {
+function search(s: ChessState, depth: number, alpha: number, beta: number, ply: number): number {
+  // Every node costs a move generation, so the clock is read often enough to stop near the budget.
+  if (((nodes += 1) & 255) === 0 && performance.now() >= deadline) stopped = true;
+  if (stopped) return 0;
+  if (s.halfmove >= 100 || insufficientMaterial(s.board)) return 0;
+  // A leaf is not hashed and generates its moves once, inside the quiescence search.
+  if (depth <= 0) return quiesce(s, alpha, beta, 3, ply);
+
+  const key = searchKey(s);
+  // A position already on the board is a draw in the making: the match stops at the third time.
+  if ((repeated.get(key) ?? 0) > 0) return 0;
+
+  const start = alpha;
+  const found = table.get(key);
+  if (found && found.depth >= depth) {
+    // A mate score means "in n plies from here", so it travels with the distance to this node.
+    const score = found.score > MATE_IN ? found.score - ply : found.score < -MATE_IN ? found.score + ply : found.score;
+    if (found.flag === EXACT) return score;
+    if (found.flag === LOWER && score >= beta) return score;
+    if (found.flag === UPPER && score <= alpha) return score;
+  }
+
   const moves = legalMoves(s);
   if (moves.length === 0) return inCheck(s) ? -MATE + ply : 0;
-  if (s.halfmove >= 100 || insufficientMaterial(s.board)) return 0;
-  if (depth === 0) return quiesce(s, alpha, beta, 3);
-  moves.sort((a, b) => orderScore(b) - orderScore(a));
+
+  order(moves, found?.best ?? 0, ply);
+  repeated.set(key, 1);
+  let best = -MATE - 1;
+  let bestMove = 0;
   for (const m of moves) {
-    const score = -negamax(makeMove(s, m), depth - 1, -beta, -alpha, ply + 1);
-    if (score >= beta) return score;
-    alpha = Math.max(alpha, score);
+    const score = -search(makeMove(s, m), depth - 1, -beta, -alpha, ply + 1);
+    if (score > best) {
+      best = score;
+      bestMove = slot(m);
+    }
+    if (score > alpha) alpha = score;
+    if (alpha >= beta) {
+      // A quiet move good enough to cut off is worth trying early in sister positions.
+      if (!m.captured && !m.promotion) {
+        if (killers[ply * 2] !== slot(m)) {
+          killers[ply * 2 + 1] = killers[ply * 2];
+          killers[ply * 2] = slot(m);
+        }
+        history[slot(m)] += depth * depth;
+      }
+      break;
+    }
   }
-  return alpha;
+  repeated.delete(key);
+
+  if (!stopped) {
+    const score = best > MATE_IN ? best + ply : best < -MATE_IN ? best - ply : best;
+    table.set(key, { depth, score, flag: best <= start ? UPPER : best >= beta ? LOWER : EXACT, best: bestMove });
+  }
+  return best;
 }
 
-/** The classic bot: alpha-beta to `depth` plies, then captures until quiet. `random` breaks ties. */
-export function botMove(s: ChessState, depth = 2, random: () => number = Math.random): Move {
-  const moves = legalMoves(s).sort((a, b) => orderScore(b) - orderScore(a));
-  let best: Move[] = [];
-  let bestScore = -Infinity;
-  for (const m of moves) {
-    // A full window for every root move, so equal moves really compare equal.
-    const score = -negamax(makeMove(s, m), depth - 1, -MATE, MATE, 1);
-    if (score > bestScore) {
-      bestScore = score;
-      best = [m];
-    } else if (score === bestScore) best.push(m);
+export interface SearchOptions {
+  /** Milliseconds the search may spend. It always finishes at least the first ply. */
+  budgetMs?: number;
+  /** A ceiling on the depth, for tests that want one fixed, fast answer. */
+  maxDepth?: number;
+  /** Breaks ties between moves that come out equal. */
+  random?: () => number;
+  /** `searchKey` of every position already played, so a repetition is seen as the draw it is. */
+  repeats?: readonly number[];
+}
+
+/**
+ * The classic bot: alpha-beta with a quiescence search, deepened one ply at a time until the time
+ * budget runs out. The root list is shuffled first, so moves that really are equal are equally
+ * likely and no two games are the same; after that each iteration starts with the order the last
+ * one found, which is what makes the pruning pay.
+ */
+export function botMove(s: ChessState, options: SearchOptions = {}): Move {
+  const { budgetMs = 200, maxDepth = 64, random = Math.random, repeats = [] } = options;
+  const ranked = legalMoves(s);
+  if (ranked.length <= 1) return ranked[0];
+
+  table.clear();
+  history.fill(0);
+  killers = new Int32Array((maxDepth + 8) * 2);
+  repeated = new Map();
+  for (const key of repeats) repeated.set(key, (repeated.get(key) ?? 0) + 1);
+  deadline = performance.now() + budgetMs;
+  nodes = 0;
+  stopped = false;
+
+  for (let i = ranked.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [ranked[i], ranked[j]] = [ranked[j], ranked[i]];
   }
-  return best[Math.floor(random() * best.length)];
+  order(ranked, 0, 0);
+  let best = ranked[0];
+  for (let depth = 1; depth <= maxDepth; depth++) {
+    const scored: { move: Move; score: number }[] = [];
+    let alpha = -MATE - 1;
+    for (const m of ranked) {
+      const score = -search(makeMove(s, m), depth - 1, -MATE, -alpha, 1);
+      if (stopped) break;
+      scored.push({ move: m, score });
+      if (score > alpha) alpha = score;
+    }
+    // Half an iteration says nothing: the moves not yet tried were never compared.
+    if (scored.length < ranked.length) break;
+    // A stable sort, so moves that scored the same keep the order the shuffle gave them.
+    scored.sort((a, b) => b.score - a.score);
+    ranked.splice(0, ranked.length, ...scored.map((x) => x.move));
+    best = scored[0].move;
+    // A forced mate is the end of the question, and so is a lost one.
+    if (Math.abs(scored[0].score) > MATE_IN || performance.now() >= deadline) break;
+  }
+  return best;
 }
 
 // ---- Facts about each move ------------------------------------------------------------------------
@@ -399,20 +660,43 @@ export interface MoveFacts {
   san: string;
   check: boolean;
   mate: boolean;
-  /** Points the opponent can win with its best capture in reply (0 = nothing hangs), and that reply. */
+  /** Pawns of material the opponent wins with its best reply (0 = nothing hangs), and that reply. */
   risk: number;
   riskSan: string | null;
+  /** The opponent has mate in one in reply, and how it mates. */
+  matedBy: string | null;
   stalemates: boolean;
   /** Static evaluation after the move, in pawns, from the mover's point of view. */
   evalAfter: number;
 }
 
-const points = (p: Piece | null) => (p ? Math.round(VALUE[typeOf(p)] / 100) : 0);
+/** Centipawns as a plain number of pawns: 320 reads 3.2, 900 reads 9. `+ 0` turns -0 into 0, which JSON keeps. */
+const pawns = (cp: number) => Math.round(cp) / 100 + 0;
+/** What a move wins outright: the piece it takes, plus what a pawn gains by becoming a piece. */
+const won = (m: Move) => (m.captured ? VALUE[typeOf(m.captured)] : 0) + (m.promotion ? VALUE[m.promotion] - VALUE.p : 0);
 
 /**
- * For every legal move: what it takes, whether it checks or mates, and the most material the
- * opponent can then win with a single capture (the captured piece, less the capturer if the
- * square is defended). A one-move look, not a search: it catches hanging pieces, not tactics.
+ * Static exchange evaluation: what the side to move really wins by taking on `sq`, in centipawns,
+ * when both sides may keep taking or stop. Only legal captures count, so a pinned defender does
+ * not defend and a king cannot recapture a protected piece, and a promotion on the square counts
+ * as what the pawn becomes.
+ */
+export function exchangeOn(s: ChessState, sq: number): number {
+  if (!isAttacked(s.board, sq, s.turn)) return 0;
+  let best = 0;
+  for (const m of legalMoves(s)) {
+    if (m.to !== sq || !m.captured) continue;
+    const gain = won(m) - exchangeOn(makeMove(s, m), sq);
+    if (gain > best) best = gain;
+  }
+  return best;
+}
+
+/**
+ * For every legal move: what it takes, whether it checks or mates, the most material the opponent
+ * can win in reply once the exchange on that square is played out, and whether it walks into mate
+ * in one. A one-move look plus the exchange, not a search: it catches hanging pieces and bad
+ * trades, not deeper tactics.
  */
 export function analyze(s: ChessState, legal: Move[] = legalMoves(s)): MoveFacts[] {
   return legal.map((move): MoveFacts => {
@@ -421,11 +705,15 @@ export function analyze(s: ChessState, legal: Move[] = legalMoves(s)): MoveFacts
     const check = inCheck(after);
     let risk = 0;
     let riskMove: Move | null = null;
+    let mateMove: Move | null = null;
     for (const reply of replies) {
-      if (!reply.captured) continue;
+      const takes = won(reply);
+      if (takes === 0 && mateMove) continue;
       const landed = makeMove(after, reply);
-      const defended = isAttacked(landed.board, reply.to, s.turn);
-      const gain = points(reply.captured) - (defended ? points(reply.piece) : 0);
+      // Mate ends the argument about material, so it is looked for on every reply, not just captures.
+      if (!mateMove && inCheck(landed) && legalMoves(landed).length === 0) mateMove = reply;
+      if (takes === 0) continue;
+      const gain = takes - exchangeOn(landed, reply.to);
       if (gain > risk) {
         risk = gain;
         riskMove = reply;
@@ -434,13 +722,14 @@ export function analyze(s: ChessState, legal: Move[] = legalMoves(s)): MoveFacts
     return {
       move,
       id: moveId(move),
-      san: toSan(s, move, legal),
+      san: toSan(s, move, legal, { after, replies }),
       check,
       mate: check && replies.length === 0,
-      risk,
+      risk: pawns(risk),
       riskSan: riskMove ? toSan(after, riskMove, replies) : null,
+      matedBy: mateMove ? toSan(after, mateMove, replies) : null,
       stalemates: !check && replies.length === 0,
-      evalAfter: Math.round(evaluate(after) * (s.turn === 'w' ? 1 : -1)) / 100,
+      evalAfter: pawns(evaluate(after) * (s.turn === 'w' ? 1 : -1)),
     };
   });
 }
@@ -461,9 +750,10 @@ export function describeMove(f: MoveFacts): Record<string, string> {
   if (type === 'k' && !move.flag) notes.push('king move: gives up castling');
   return {
     move: `${f.san}: ${NAMES[type]} ${squareName(move.from)} to ${squareName(move.to)}`,
-    captures: move.captured ? `a ${NAMES[typeOf(move.captured)]} (${points(move.captured)} points)` : 'nothing',
+    captures: move.captured ? `a ${NAMES[typeOf(move.captured)]} (${pawns(VALUE[typeOf(move.captured)])} points)` : 'nothing',
     check: f.mate ? 'CHECKMATE: wins the game' : f.stalemates ? 'STALEMATE: the game is drawn at once' : f.check ? 'gives check' : 'no',
     opponent_can_win_next: f.mate ? 'nothing' : f.risk > 0 ? `${f.risk} points with ${f.riskSan}` : 'nothing',
+    opponent_can_mate_next: f.mate ? 'no' : f.matedBy ? `YES: ${f.matedBy} CHECKMATES YOU. Do not play this move.` : 'no',
     notes: notes.join('; ') || 'none',
   };
 }

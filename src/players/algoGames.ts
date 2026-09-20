@@ -118,7 +118,7 @@ function chessSamples(): AlgoInput[] {
     const legal = chess.legalMoves(state);
     if (chess.outcome(state, legal)) break;
     if ([0, 7, 16, 24].includes(ply)) out.push(buildChessRequest(state, chess.analyze(state, legal), []).data);
-    state = chess.makeMove(state, ply % 4 === 3 ? legal[Math.floor(random() * legal.length)] : chess.botMove(state, 1, random));
+    state = chess.makeMove(state, ply % 4 === 3 ? legal[Math.floor(random() * legal.length)] : chess.botMove(state, { maxDepth: 1, budgetMs: 50, random }));
   }
   return out;
 }
@@ -172,9 +172,9 @@ export const ALGO_GAMES: Record<DecisionGameId, AlgoGame> = {
   chess: {
     goal: 'Standard chess. You are given every legal move with facts about it; there is no engine to call, so play well from the facts: material, safety, checks, and the static evaluation after each move.',
     state:
-      'board: 8 strings of 8 chars, rank 8 first, FEN letters (upper case White, lower case Black), "." empty. youAre: "w" or "b". moveNumber. inCheck: boolean. materialBalance: in pawns, positive when you are ahead.',
+      'board: 8 strings of 8 chars, rank 8 first, FEN letters (upper case White, lower case Black), "." empty. youAre: "w" or "b". moveNumber. inCheck: boolean. materialBalance: in pawns, positive when you are ahead. fen: the whole position in one string. castling: the rights still standing, e.g. "KQkq" or "-". enPassant: the square a pawn may be taken on, e.g. "d6", or null. halfmoveClock: moves since the last capture or pawn move; 100 is a draw. repetitions: how often this position has already stood on the board; the third time is a draw.',
     facts:
-      'san (e.g. "Nf3"), piece ("p" "n" "b" "r" "q" "k"), from, to (e.g. "e2"). captures: piece letter or null; captureValue in pawns (p1 n3.2 b3.3 r5 q9). givesCheck, checkmate, stalemate: booleans. opponentCanWinNext: pawns of material the opponent can win with its best single capture in reply (0 means nothing hangs); this is a one-move look, not a search. castles: boolean. promotesTo: "q" "r" "b" "n" or null. evalAfter: static evaluation after the move in pawns from your point of view (material plus piece placement); it does not see the opponent reply, so combine it with opponentCanWinNext.',
+      'san (e.g. "Nf3"), piece ("p" "n" "b" "r" "q" "k"), from, to (e.g. "e2"). captures: piece letter or null. All values are in pawns on one scale: pawn 1, knight 3.2, bishop 3.3, rook 5, queen 9. captureValue: what this move takes. givesCheck, checkmate, stalemate: booleans. opponentCanWinNext: pawns the opponent wins with its best reply once the exchange on that square is played out, counting promotions and only legal recaptures (0 means nothing hangs); it is one square deep, not a search. opponentCanMateNext: true when the opponent has mate in one in reply — never play such a move. castles: boolean. promotesTo: "q" "r" "b" "n" or null. evalAfter: static evaluation after the move in pawns from your point of view (material plus piece placement); it does not see the opponent reply, so combine it with opponentCanWinNext.',
     samples: chessSamples,
   },
   xiangqi: {

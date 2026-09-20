@@ -36,8 +36,11 @@ thrown away at the deadline: the answer still arrives and is still counted, beca
 and only the move is too late to play.
 
 In Chess every legal move is offered (there is no pruning to bias the choice), each with what it
-captures, whether it checks or mates, and the most material the opponent could win with one capture
-in reply. That last fact is a one-move look, not a search: it catches hanging pieces, not tactics.
+captures, whether it checks or mates, whether the opponent has mate in one in reply, and the most
+material the opponent could win. That material fact plays the exchange on the square out to the end
+and counts only legal recaptures, so a pinned defender does not make a piece look safe and a pawn
+that queens is worth what it becomes; it is one square deep, not a search, so it catches hanging
+pieces and bad trades, not deeper tactics.
 Both move generators are verified by perft against the published counts (`tests/chess.test.ts`,
 `tests/xiangqi.test.ts`). Xiangqi offers its moves the same way.
 

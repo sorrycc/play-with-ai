@@ -322,6 +322,37 @@ body {
   filter: drop-shadow(0 4px 3px rgba(31, 17, 71, 0.3));
 }
 
+/* A promoting pawn: it arrives as a pawn, and its new piece takes over on the last frames. */
+@keyframes piece-promote-out {
+  0%,
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes piece-promote-in {
+  0%,
+  82% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.piece-slide.piece-promote-out {
+  animation:
+    piece-slide 0.52s cubic-bezier(0.45, 0, 0.25, 1) both,
+    piece-promote-out 0.52s linear both;
+}
+.piece-promote-in {
+  z-index: 6;
+  animation: piece-promote-in 0.52s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 /* The taken piece lingers for a moment under the arriving one, then fades. */
 @keyframes piece-taken {
   0%,
@@ -385,7 +416,8 @@ body {
   }
 }
 .square-ping {
-  animation: square-ping 0.9s ease-out 0.35s 2 both;
+  /* Two rings, done inside the shortest gap between two moves, so the next one starts clean. */
+  animation: square-ping 0.26s ease-out 0.32s 2 both;
 }
 
 @keyframes arrow-in {

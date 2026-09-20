@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Decision, DecisionRequest, Player } from '../src/core/types';
 import { ChessMatch, buildChessRequest } from '../src/games/chess/match';
-import { analyze, botMove, describeMove, fromFen, insufficientMaterial, legalMoves, makeMove, moveId, outcome, perft, startState, toSan } from '../src/games/chess/engine';
+import { analyze, botMove, describeMove, exchangeOn, fromFen, insufficientMaterial, legalMoves, makeMove, moveId, outcome, perft, positionKey, searchKey, startState, toFen, toSan } from '../src/games/chess/engine';
 
 const play = (fen: string, ...ids: string[]) => {
   let s = fromFen(fen);
@@ -70,7 +70,7 @@ describe('chess rules and notation', () => {
     expect(mate.san).toBe('Qh4#');
     expect(mate.mate).toBe(true);
     expect(describeMove(mate).check).toBe('CHECKMATE: wins the game');
-    expect(moveId(botMove(s, 2))).toBe('d8h4');
+    expect(moveId(botMove(s, { maxDepth: 2 }))).toBe('d8h4');
     expect(outcome(makeMove(s, mate.move))).toEqual({ kind: 'checkmate', winner: 'b' });
   });
 
@@ -101,10 +101,109 @@ describe('chess rules and notation', () => {
     expect(safe.risk).toBe(0);
     // The bot takes a free rook.
     const free = fromFen('4k3/8/8/3r4/8/8/8/3QK3 w - - 0 1');
-    expect(moveId(botMove(free, 2))).toBe('d1d5');
+    expect(moveId(botMove(free, { maxDepth: 2 }))).toBe('d1d5');
     const fields = Object.keys(describeMove(blunder));
     for (const f of analyze(s)) expect(Object.keys(describeMove(f))).toEqual(fields);
   });
+
+  it('plays the exchange out: a defender that cannot legally take does not defend', () => {
+    // Kg1 "defends" f2, but taking back is illegal while Bh4 and Qb6 cover the square, so the
+    // rook is simply lost. Counting the capturer's value alone made this look like 2 points.
+    const s = fromFen('4k3/8/1q6/8/7b/8/P4R2/6K1 w - - 0 1');
+    const quiet = analyze(s).find((f) => f.id === 'a2a3')!;
+    expect(quiet.risk).toBe(5);
+    expect(exchangeOn(makeMove(s, quiet.move), 13)).toBe(0); // f2: nothing of White's can take back
+    // A pawn that queens is worth what it becomes, capture or no capture.
+    const queening = analyze(fromFen('4k3/8/8/8/8/8/1p5P/4K3 w - - 0 1')).find((f) => f.id === 'h2h3')!;
+    expect(queening.risk).toBe(8);
+    const takesARook = analyze(fromFen('4k3/8/8/8/8/8/1p5P/R3K3 w - - 0 1')).find((f) => f.id === 'h2h3')!;
+    expect(takesARook.risk).toBe(13);
+    expect(takesARook.riskSan).toBe('bxa1=Q+');
+    // Taking a defended bishop with the queen hands over the whole queen: nothing takes back.
+    const trade = analyze(fromFen('4k3/8/5n2/3b4/8/8/8/3QK3 w - - 0 1')).find((f) => f.id === 'd1d5')!;
+    expect(trade.risk).toBe(9);
+    expect(trade.riskSan).toBe('Nxd5');
+    // With a rook on the fifth rank the exchange runs on: Qxd5 Nxd5 Rxd5 costs the queen less a knight.
+    const covered = analyze(fromFen('4k3/8/5n2/R2b4/8/8/8/3QK3 w - - 0 1')).find((f) => f.id === 'd1d5')!;
+    expect(covered.risk).toBe(5.8);
+  });
+
+  it('warns that a move walks into mate in one', () => {
+    // The back rank: b3 and b4 leave no air, and Ra1 is mate. Only the h- and g-pawns save it.
+    const s = fromFen('r5k1/6pp/8/8/8/8/1P4PP/7K w - - 0 1');
+    const facts = analyze(s);
+    expect(facts.find((f) => f.id === 'b2b3')!.matedBy).toBe('Ra1#');
+    expect(describeMove(facts.find((f) => f.id === 'b2b4')!).opponent_can_mate_next).toContain('Ra1#');
+    expect(facts.find((f) => f.id === 'h2h3')!.matedBy).toBeNull();
+    expect(describeMove(facts.find((f) => f.id === 'h2h3')!).opponent_can_mate_next).toBe('no');
+    // And the bot does not play one of them.
+    expect(['h3', 'h4', 'g3', 'g4', 'Kg1']).toContain(toSan(s, botMove(s, { budgetMs: 200 })));
+  });
+
+  it('calls a dead position a draw, but leaves two knights alone', () => {
+    const dead = (fen: string) => insufficientMaterial(fromFen(fen).board);
+    expect(dead('8/8/4k3/2b5/8/2B1K3/8/8 w - - 0 1')).toBe(true); // bishops both on dark squares
+    expect(dead('8/8/4k3/3b4/8/2B1K3/8/8 w - - 0 1')).toBe(false); // one each colour: mate is possible
+    expect(dead('8/8/4k3/8/8/2NNK3/8/8 w - - 0 1')).toBe(false); // two knights: unlikely, not impossible
+    expect(dead('8/8/4k3/8/8/4K3/8/8 w - - 0 1')).toBe(true);
+  });
+
+  it('counts a repetition through an en passant square nobody can use', () => {
+    // After 1.e4 no black pawn can take on e3, so the position is the one that comes back on move 3.
+    const first = play(START, 'e2e4');
+    const again = play(START, 'e2e4', 'g8f6', 'g1f3', 'f6g8', 'f3g1');
+    expect(positionKey(first)).toBe(positionKey(again));
+    // A square that can really be used still tells two positions apart.
+    const real = play(START, 'e2e4', 'a7a6', 'e4e5', 'd7d5');
+    expect(positionKey(real)).not.toBe(positionKey({ ...real, ep: null }));
+    expect(searchKey(first)).not.toBe(searchKey(play(START, 'd2d4')));
+  });
+
+  it('writes a FEN back out', () => {
+    expect(toFen(startState())).toBe(START);
+    expect(toFen(play(START, 'e2e4', 'c7c5'))).toBe('rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2');
+  });
+});
+
+describe('the classic chess bot', () => {
+  // A fixed depth, so the answer does not depend on how fast the machine is; the budget only stops
+  // a runaway. Both sides are the bot, which is the hard part: it has to make progress every move.
+  const finish = (fen: string) => {
+    let s = fromFen(fen);
+    const keys = [searchKey(s)];
+    for (let ply = 0; ply < 160; ply++) {
+      const legal = legalMoves(s);
+      const end = outcome(s, legal);
+      if (end) return { end, plies: ply };
+      s = makeMove(s, botMove(s, { maxDepth: 5, budgetMs: 9000, random: () => 0.5, repeats: keys }));
+      keys.push(searchKey(s));
+    }
+    return { end: null, plies: 160 };
+  };
+
+  it('mates with a queen and with a rook against a bare king, inside the fifty moves', () => {
+    for (const fen of ['7k/5Q2/8/8/8/8/8/6K1 w - - 0 1', '7k/8/8/8/8/8/8/R5K1 w - - 0 1']) {
+      const { end, plies } = finish(fen);
+      expect(end).toEqual({ kind: 'checkmate', winner: 'w' });
+      expect(plies).toBeLessThan(100);
+    }
+  }, 120_000);
+
+  it('sees a mate in two and does not stop in the middle of an exchange', () => {
+    // 1.Qg7+ Kxg7 2.Nxh5# is not the point; the point is that a mate found is played at once.
+    const mateIn1 = fromFen('6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1');
+    expect(toSan(mateIn1, botMove(mateIn1, { budgetMs: 200 }))).toBe('Ra8#');
+    // A queen that takes a defended pawn loses itself: the quiescence search has to see it.
+    const trap = fromFen('4k3/8/5n2/3p4/8/8/8/3QK3 w - - 0 1');
+    expect(toSan(trap, botMove(trap, { budgetMs: 200 }))).not.toBe('Qxd5');
+  }, 30_000);
+
+  it('does not repeat a position it has already been in when it is winning', () => {
+    const s = fromFen('7k/8/8/8/8/8/6Q1/6K1 w - - 0 1');
+    const twice = [searchKey(s), searchKey(makeMove(s, legalMoves(s).find((m) => moveId(m) === 'g2g7')!))];
+    const move = botMove(s, { budgetMs: 200, random: () => 0.5, repeats: twice });
+    expect(moveId(move)).not.toBe('g2g7');
+  }, 30_000);
 });
 
 
