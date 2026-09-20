@@ -1,0 +1,65 @@
+# Internals
+
+How each game turns a position into options, and how each kind of player is asked.
+
+## Building the options
+
+Code owns the game; a player only picks. Each game enumerates its legal moves, simulates them and
+describes every outcome in words with the same fields on every option (`lines_cleared: "two lines"`,
+`holes_created: "none"`, or in Gomoku `makes: "an open four"`, `blocks: "opponent's five"`). Every
+player gets the same `DecisionRequest` and returns one option id, so an illegal move cannot happen
+and every role is interchangeable.
+
+In Gomoku 225 cells is too many to describe, so code offers the ~20 most relevant cells. Every
+winning move and every forced block is always in the list, so the pruning never decides a game.
+Options are listed by board position, not by score, so the order does not leak the bot's ranking.
+
+In Snake a player picks one of at most three directions, each with exact facts: steps to the food,
+how many empty cells stay reachable (flood fill), whether it is a dead end, and whether the
+opponent's head could enter the same cell. The automatic tick is 0.9 s with Jev and 2.2 s with a
+model, because both have slow outliers well above their average; lockstep waits for every answer
+instead.
+
+In Chess every legal move is offered (there is no pruning to bias the choice), each with what it
+captures, whether it checks or mates, and the most material the opponent could win with one capture
+in reply. That last fact is a one-move look, not a search: it catches hanging pieces, not tactics.
+Both move generators are verified by perft against the published counts (`tests/chess.test.ts`,
+`tests/xiangqi.test.ts`). Xiangqi offers its moves the same way.
+
+## How a model is asked
+
+How a model is asked matters. Probed through this proxy: in JSON mode Claude Haiku ignored the
+format and wrote 400 tokens of prose (4.4 s); with a forced function call it answers in 1.5 s.
+DeepSeek and Qwen reject a forced call while thinking, so thinking uses JSON mode, which is also
+the retry when a model rejects the call. A plain-text reply counts only if it names exactly one
+option: prose that weighs several is ambiguous, and a fallback to the classic bot beats a guess.
+
+## Which models are offered
+
+The model picker offers `deepseek/deepseek-v4.1-flash`, `qwen/qwen3.8-flash` and
+`anthropic/claude-haiku-4.5`; "Custom…" takes any other ZenMux model id.
+
+## Custom algorithms
+
+Every game hands a player the same decision twice: as words for a model, and as plain data for code
+(`DecisionRequest.data`: the position, plus numbers and flags about every legal move, such as
+`holesCreated`, `reachable`, `opponentCanWinNext`, `evalAfter`). A generated algorithm gets that data
+and returns one option id. It is tried on real positions (and sent back for one repair if it
+fails), then saved in the browser. `src/players/algoGames.ts` documents the fields of each game for the
+model that writes the code, and a test fails if a field is sent but not documented.
+
+The code is written by a language model, so it is treated as untrusted. It runs in its own Web
+Worker with `fetch`, `XMLHttpRequest`, `WebSocket`, `importScripts` and the rest removed from the
+global object and its prototypes before it starts, so it cannot reach the network or the `/api`
+proxy; it has no DOM and no access to the page's storage; and a move that takes longer than 1.5 s
+kills the worker, so an endless loop costs one move rather than the page. A throw, a timeout or an
+id that is not on offer falls back to the classic bot for that move and is counted. This is
+containment for careless code on a local site, not a hardened sandbox, and the code is shown to you
+before you use it.
+
+## Measured latencies
+
+Measured on 2026-09-19 through this proxy: DeepSeek V4.1 Flash answers in 1.4 to 3.5 s with
+reasoning off (about 12 s with it on), Jev in 0.3 to 0.8 s. That is why AI Tetris defaults to a
+gentle 400 ms per row, and why lockstep mode exists: it removes gravity so only decision quality is
+compared.
