@@ -21,7 +21,8 @@ Games so far:
   draw: the tournament rules on perpetual check need a judgment of intent and are not implemented.
 - **代码对决 Code Duel**: you against Qoder CLI. One task card at three levels. You write in an
   editor on the page, the agent works unattended on the server, and whoever first passes the card's
-  hidden acceptance test wins.
+  hidden acceptance test wins. Give it a head start if that is too easy, or take the card on your
+  own in practice mode, which needs no agent installed.
 
 In both chess games the last move is never a mystery: the piece slides to its square, an arrow
 stays until the next move, and a line above the board spells it out.
@@ -49,8 +50,9 @@ npm run dev               # http://127.0.0.1:5173
 | `ZENMUX_API_KEY` | The "AI model" role: any chat model on [ZenMux](https://zenmux.ai) |
 | `TYPESAFE_API_KEY` | The "Jev" role: [TypeSafe](https://docs.typesafe.ai) System One |
 
-The code duel needs no key, but it needs the agent's CLI on the `PATH` of the process you start the
-server from: `qodercli`, signed in. `/api/config` reports which agents were found.
+The code duel needs no key, but to play against an agent it needs that agent's CLI on the `PATH` of
+the process you start the server from: `qodercli`, signed in. `/api/config` reports which agents
+were found. Practice mode needs neither.
 
 A role whose key is missing is greyed out; everything else still works. Keys are read only by the
 proxy (`server/api.mjs`) and never reach the browser. `.env` is git-ignored.

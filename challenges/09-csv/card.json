@@ -1,0 +1,74 @@
+{
+  "level": 3,
+  "title": {
+    "zh": "会读引号的 CSV 一行",
+    "en": "A CSV line that understands quotes"
+  },
+  "intro": {
+    "zh": "parseCsvLine 把一行 CSV 拆成字段，现在只会按逗号切。引号里的逗号本该是内容，不是分隔符。",
+    "en": "parseCsvLine splits one CSV line into fields, and today it only splits on commas. A comma inside quotes is content, not a separator."
+  },
+  "tasks": {
+    "zh": [
+      "双引号里的逗号属于字段内容。",
+      "字段两边的双引号不出现在结果里。",
+      "引号里的两个双引号代表一个双引号。",
+      "空字段是空字符串，末尾的空字段也要留着。"
+    ],
+    "en": [
+      "A comma inside double quotes belongs to the field.",
+      "The quotes around a field are not part of the result.",
+      "Two double quotes inside a quoted field mean one double quote.",
+      "An empty field is an empty string, including a trailing one."
+    ]
+  },
+  "examples": [
+    {
+      "input": "parseCsvLine('a,\"b,c\",d')",
+      "output": "['a', 'b,c', 'd']"
+    },
+    {
+      "input": "parseCsvLine('\"she said \"\"hi\"\"\"')",
+      "output": "['she said \"hi\"']"
+    },
+    {
+      "input": "parseCsvLine('a,,b')",
+      "output": "['a', '', 'b']"
+    },
+    {
+      "input": "parseCsvLine('a,')",
+      "output": "['a', '']"
+    }
+  ],
+  "hint": {
+    "zh": "一个字符一个字符地走，记住此刻是否在引号里：在引号里时逗号只是普通字符，遇到引号先看下一个字符是不是也是引号。",
+    "en": "Walk the line one character at a time and remember whether you are inside quotes: inside, a comma is just a character, and on a quote look at the next character to see whether it is a quote too."
+  },
+  "files": [
+    "parse-csv-line.js",
+    "parse-csv-line.test.js"
+  ],
+  "publicTest": [
+    "parse-csv-line.test.js"
+  ],
+  "hiddenTests": [
+    {
+      "title": "card 09: a comma inside quotes is content",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 09: the quotes themselves are gone",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 09: two quotes inside a quoted field are one quote",
+      "covers": "task:2"
+    },
+    {
+      "title": "card 09: empty fields are kept, last one included",
+      "covers": "task:3"
+    }
+  ],
+  "open": "parse-csv-line.js",
+  "test": "node"
+}

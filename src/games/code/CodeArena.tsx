@@ -9,10 +9,11 @@ import { Countdown, Mark, PlayerBadge, MatchEnding, StatsGrid, seatMood, type Co
 import { useMatch } from '../../ui/useMatch';
 import { Editor } from './Editor';
 import { LEVELS, LevelBadge } from './Level';
-import { CodeMatch, loadCards, type Card, type CodeOptions, type LogEntry, type SideStatus } from './match';
+import { CodeMatch, loadCards, PRACTICE, type Card, type CodeOptions, type LogEntry, type SideStatus } from './match';
 
 const STATUS_KEY: Record<SideStatus, TextKey> = {
   idle: 'code.status.idle',
+  waiting: 'code.status.waiting',
   working: 'code.status.working',
   verifying: 'code.status.verifying',
   pass: 'code.status.pass',
@@ -30,13 +31,15 @@ function StatusTag({ status }: { status: SideStatus }) {
   return <span className={`shrink-0 rounded-full border-2 border-ink px-2 text-xs font-bold ${color}`}>{t(STATUS_KEY[status])}</span>;
 }
 
-function TaskCard({ card }: { card: Card }) {
+function TaskCard({ card, best }: { card: Card; best: number | null }) {
   const lang = i18n.lang;
   return (
     <section className="toy flex flex-col gap-3 p-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-xl font-bold leading-tight">{card.title[lang]}</h2>
         <LevelBadge level={card.level} />
+        {/* What this card has cost you before: the only score a one-person game can keep. */}
+        <span className="text-xs font-semibold opacity-60">{best === null ? t('code.best.none') : t('code.best', { clock: formatClock(best) })}</span>
       </div>
       <p className="text-sm leading-snug opacity-80">{card.intro[lang]}</p>
       <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-snug">
@@ -96,17 +99,42 @@ function AgentLog({ log, working, name }: { log: LogEntry[]; working: boolean; n
   );
 }
 
-function compareRows(match: CodeMatch): CompareRow[] {
+/** A patch, coloured the way every diff is. What someone wrote is the point of watching them write. */
+function Patch({ title, diff }: { title: string; diff: string }) {
+  const lines = diff ? diff.split('\n') : [];
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <h4 className="text-xs font-bold uppercase tracking-wide opacity-60">{title}</h4>
+      {lines.length === 0 ? (
+        <p className="text-xs opacity-50">{t('code.diff.none')}</p>
+      ) : (
+        <pre className="max-h-80 overflow-auto rounded-xl border-2 border-ink/30 bg-paper p-2 font-mono text-[11px] leading-snug">
+          {lines.map((line, i) => (
+            <div key={i} className={line.startsWith('+') && !line.startsWith('+++') ? 'bg-mint/40' : line.startsWith('-') && !line.startsWith('---') ? 'bg-pink/20' : line.startsWith('@@') ? 'opacity-50' : 'opacity-70'}>
+              {line || ' '}
+            </div>
+          ))}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function compareRows(match: CodeMatch, practice: boolean): CompareRow[] {
   const { human, agent } = match;
-  const verdict = (status: SideStatus) => (status === 'pass' ? '✅ PASS' : status === 'fail' ? '❌ FAIL' : '–');
+  const verdict = (status: SideStatus | undefined) => (status === 'pass' ? '✅ PASS' : status === 'fail' ? '❌ FAIL' : '–');
+  const rows: CompareRow[] = [
+    [t('code.cmp.verdict'), verdict(human.status), verdict(agent?.status)],
+    [t('code.cmp.time'), human.status === 'pass' ? seconds(human.doneMs) : '–', agent && agent.doneMs !== null && agent.status !== 'killed' ? seconds(agent.doneMs) : '–'],
+    [t('code.cmp.attempts'), human.attempts, agent?.status === 'pass' || agent?.status === 'fail' ? 1 : 0],
+    [t('code.cmp.changed'), match.changedFiles().length, agent?.changed.length ?? 0],
+  ];
+  if (practice) return rows.map(([label, left]) => [label, left, '–']);
   return [
-    [t('code.cmp.verdict'), verdict(human.status), verdict(agent.status)],
-    [t('code.cmp.time'), human.status === 'pass' ? seconds(human.doneMs) : '–', agent.doneMs !== null && agent.status !== 'killed' ? seconds(agent.doneMs) : '–'],
-    [t('code.cmp.attempts'), human.attempts, agent.status === 'pass' || agent.status === 'fail' ? 1 : 0],
-    [t('code.cmp.changed'), match.changedFiles().length, agent.changed.length],
-    [t('code.cmp.turns'), '–', agent.usage?.turns ?? '–'],
-    [t('code.cmp.tokens'), '–', agent.usage ? `${agent.usage.inputTokens.toLocaleString()} / ${agent.usage.outputTokens.toLocaleString()}` : '–'],
-    [t('code.cmp.credits'), '–', agent.usage ? agent.usage.credits.toFixed(2) : '–'],
+    ...rows,
+    [t('code.cmp.turns'), '–', agent?.usage?.turns ?? '–'],
+    [t('code.cmp.tokens'), '–', agent?.usage ? `${agent.usage.inputTokens.toLocaleString()} / ${agent.usage.outputTokens.toLocaleString()}` : '–'],
+    [t('code.cmp.credits'), '–', agent?.usage ? agent.usage.credits.toFixed(2) : '–'],
   ];
 }
 
@@ -123,7 +151,12 @@ export function CodeArena({
   onSetup: () => void;
   onLobby: () => void;
 }) {
-  const players = useMemo(() => seats.map(createPlayer) as [Player, Player], [seats]);
+  const practice = options.agent === PRACTICE;
+  const players = useMemo(() => {
+    const seated = seats.map(createPlayer) as [Player, Player];
+    // Nobody is sitting opposite in practice: the other seat is the card itself.
+    return (practice ? [seated[0], { ...seated[1], name: t('code.practice'), short: t('code.practice'), emoji: '🎯', logo: undefined, color: '#9aa0a6' }] : seated) as [Player, Player];
+  }, [seats, practice]);
   const { match, count } = useMatch((onChange) => new CodeMatch(options, onChange, (event) => sfx.play(event.pass ? 'levelup' : 'miss')));
   const [card, setCard] = useState<Card | null>(null);
   const [active, setActive] = useState('');
@@ -143,6 +176,14 @@ export function CodeArena({
     return () => clearInterval(id);
   }, []);
 
+  // A closing tab never unmounts React. A beacon is the only thing that still gets out.
+  useEffect(() => {
+    if (!match) return;
+    const leave = () => match.leave();
+    window.addEventListener('pagehide', leave);
+    return () => window.removeEventListener('pagehide', leave);
+  }, [match]);
+
   // A verdict appears under the editor, which may be off screen on a laptop.
   const verdictBox = useRef<HTMLDivElement>(null);
   const lastVerdict = match?.verdict ?? null;
@@ -156,7 +197,9 @@ export function CodeArena({
   const elapsed = match.elapsed();
   const left = Math.max(0, match.limitMs - elapsed);
   const verdict = match.verdict;
+  const agent = match.agent;
   const agentBin = findAgent(options.agent)?.bin ?? options.agent;
+  const record = match.result !== null && match.human.status === 'pass' && (match.previousBest === null || (match.human.doneMs ?? Infinity) < match.previousBest);
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col items-center gap-5 px-4 pb-10">
@@ -166,9 +209,10 @@ export function CodeArena({
           {formatClock(elapsed)} <span className="text-base opacity-60">/ {formatClock(match.limitMs)}</span>
         </span>
         <span className="toy-sm flex items-center gap-2 !bg-white px-3 py-1 text-sm font-bold">
-          <Mark player={players[1]} size="1.3em" /> {t('code.versus', { name: players[1].name })}
+          <Mark player={players[1]} size="1.3em" /> {practice ? t('code.practice') : t('code.versus', { name: players[1].name })}
         </span>
-        <span className="toy-sm !bg-sun px-3 py-1 text-sm font-bold">{t('code.firstPass')}</span>
+        {!practice && <span className="toy-sm !bg-sun px-3 py-1 text-sm font-bold">{t('code.firstPass')}</span>}
+        {record && <span className="toy-sm !bg-mint px-3 py-1 text-sm font-bold">{t('code.best.new')}</span>}
         {match.status !== 'done' ? (
           <button className="btn bg-pink !py-1.5 text-sm text-white" onClick={() => match.stop()}>
             {t('arena.stop')}
@@ -192,9 +236,9 @@ export function CodeArena({
       )}
       {match.status === 'preparing' && !match.error && count === null && <p className="toy-sm !bg-sun/60 px-4 py-2 text-sm font-medium">⏳ {t('code.preparing')}</p>}
 
-      <div className="grid w-full items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
+      <div className={`grid w-full items-start gap-5 ${practice ? '' : 'lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]'}`}>
         <div className="flex min-w-0 flex-col gap-5">
-          {card && <TaskCard card={card} />}
+          {card && <TaskCard card={card} best={match.previousBest} />}
 
           <section className={`toy flex min-w-0 flex-col overflow-hidden ${seatMood(match.result, 0) === 'seat-win' ? 'seat-win' : ''}`}>
             <div className="p-4 pb-3">
@@ -209,13 +253,24 @@ export function CodeArena({
                   data-silent
                   className={`shrink-0 rounded-t-xl border-[3px] border-b-0 border-ink px-3 py-1 font-mono text-xs font-semibold ${name === active ? 'bg-white' : 'bg-paper opacity-60 hover:opacity-100'}`}
                   onClick={() => setActive(name)}
+                  title={match.canWrite(name) ? undefined : t('code.readOnly')}
                 >
                   {name}
+                  {/* The repository's own tests are shown so both sides read the same thing, but they are the card's. */}
+                  {!match.canWrite(name) && <span className="ml-1 opacity-60">🔒</span>}
                   {changed.includes(name) && <span className="ml-1 text-pink" title={t('code.modified')}>●</span>}
                 </button>
               ))}
             </div>
-            <Editor files={match.files} active={active} editable={match.canEdit} onEdit={(name, content) => match.edit(name, content)} onRunTests={() => void match.runTests()} onSubmit={() => void match.submit()} />
+            <Editor
+              files={match.files}
+              active={active}
+              editable={match.canEdit}
+              writable={(name) => match.canWrite(name)}
+              onEdit={(name, content) => match.edit(name, content)}
+              onRunTests={() => void match.runTests()}
+              onSubmit={() => void match.submit()}
+            />
             <div className="flex flex-wrap items-center gap-3 border-t-[3px] border-ink bg-paper p-3">
               <button className="btn bg-white !py-2 text-sm" disabled={!match.canEdit || match.busy !== null} onClick={() => void match.runTests()}>
                 {match.busy === 'test' ? t('code.running') : t('code.run')}
@@ -223,53 +278,93 @@ export function CodeArena({
               <button className="btn bg-mint !py-2" disabled={!match.canEdit || match.busy !== null} onClick={() => void match.submit()}>
                 {match.busy === 'submit' ? t('code.verifying') : t('code.submit')}
               </button>
+              {active && !match.canWrite(active) && <span className="text-xs font-semibold opacity-60">🔒 {t('code.readOnly')}</span>}
             </div>
             {verdict && (
               <div ref={verdictBox} className={`border-t-[3px] border-ink p-3 ${verdict.ok ? 'bg-mint/30' : 'bg-pink/15'}`}>
                 <p className="text-sm font-bold">{t(verdict.kind === 'test' ? (verdict.ok ? 'code.v.testOk' : 'code.v.testFail') : verdict.ok ? 'code.v.submitOk' : 'code.v.submitFail')}</p>
+                {/* How many, and which: "it failed" is not something anyone can act on. */}
+                {(verdict.passed > 0 || verdict.failed > 0) && <p className="mt-1 text-xs font-semibold opacity-70">{t('code.v.counts', { pass: verdict.passed, fail: verdict.failed })}</p>}
+                {verdict.failures.length > 0 && (
+                  <ul className="mt-1 flex list-disc flex-col gap-0.5 pl-5 font-mono text-xs">
+                    {verdict.failures.map((name) => (
+                      <li key={name}>{name}</li>
+                    ))}
+                  </ul>
+                )}
                 {!(verdict.kind === 'submit' && verdict.ok) && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs leading-snug">{verdict.output}</pre>}
               </div>
             )}
           </section>
+
+          {/* Once it is over, what each side actually wrote, side by side. */}
+          {match.result && (match.human.diff || agent?.diff) && (
+            <section className="toy flex min-w-0 flex-col gap-3 p-4">
+              <h3 className="text-sm font-bold uppercase tracking-widest opacity-60">{t('code.diff')}</h3>
+              <div className={`grid min-w-0 gap-4 ${practice ? '' : 'lg:grid-cols-2'}`}>
+                <Patch title={t('code.diff.you')} diff={match.human.diff} />
+                {!practice && <Patch title={t('code.diff.agent', { name: players[1].name })} diff={agent?.diff ?? ''} />}
+              </div>
+            </section>
+          )}
         </div>
 
-        <section className={`toy flex min-w-0 flex-col gap-3 p-4 lg:sticky lg:top-4 ${seatMood(match.result, 1)}`}>
-          {/* The bubble is what it is doing right now: its latest thought, word or tool call. */}
-          <PlayerBadge player={players[1]} thinking={match.agent.status === 'verifying' || (match.agent.status === 'working' && match.log.length === 0)} move={match.log.at(-1)?.text ?? t(STATUS_KEY[match.agent.status])} tag={<StatusTag status={match.agent.status} />} />
-          <StatsGrid
-            cols={2}
-            rows={[
-              [t('setup.model'), options.agentModel],
-              [t('code.cmp.time'), match.agent.status === 'working' ? seconds(elapsed) : seconds(match.agent.doneMs)],
-              [t('code.cmp.turns'), match.agent.usage?.turns ?? '–'],
-              [t('code.cmp.credits'), match.agent.usage ? match.agent.usage.credits.toFixed(2) : '–'],
-            ]}
-          />
-          {/* A terminal's title bar: what is running over there is the real CLI, not a model behind an API. */}
-          <div className="-mb-3 flex items-center gap-2 rounded-t-2xl border-[3px] border-b-0 border-ink bg-ink px-3 py-1.5 font-mono text-xs text-white">
-            <Mark player={{ ...players[1], color: '#2ADB5C' }} size="1.2em" />
-            <span className="min-w-0 truncate">
-              <span className="opacity-50">$</span> {agentBin} -p "…" -m {options.agentModel}
-            </span>
-          </div>
-          <AgentLog log={match.log} working={match.agent.status === 'working'} name={players[1].name} />
-          {match.agent.changed.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="font-bold opacity-60">{t('code.cmp.changed')}</span>
-              {match.agent.changed.map((name) => (
-                <span key={name} className="rounded-full border-2 border-ink bg-paper px-2 py-0.5 font-mono">
-                  {name}
-                </span>
-              ))}
+        {practice ? (
+          <section className="toy flex min-w-0 flex-col gap-2 p-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest opacity-60">🎯 {t('code.practice')}</h3>
+            <p className="text-sm leading-snug opacity-70">{t('code.practice.note')}</p>
+          </section>
+        ) : (
+          <section className={`toy flex min-w-0 flex-col gap-3 p-4 lg:sticky lg:top-4 ${seatMood(match.result, 1)}`}>
+            {/* The bubble is what it is doing right now: its latest thought, word or tool call. */}
+            <PlayerBadge
+              player={players[1]}
+              thinking={agent?.status === 'verifying' || (agent?.status === 'working' && match.log.length === 0)}
+              move={match.log.at(-1)?.text ?? t(STATUS_KEY[agent?.status ?? 'idle'])}
+              tag={<StatusTag status={agent?.status ?? 'idle'} />}
+            />
+            <StatsGrid
+              cols={2}
+              rows={[
+                [t('setup.model'), options.agentModel],
+                [t('code.cmp.time'), agent?.status === 'working' ? seconds(elapsed) : seconds(agent?.doneMs ?? null)],
+                [t('code.cmp.turns'), agent?.usage?.turns ?? '–'],
+                [t('code.cmp.credits'), agent?.usage ? agent.usage.credits.toFixed(2) : '–'],
+              ]}
+            />
+            {/* A terminal's title bar: what is running over there is the real CLI, not a model behind an API. */}
+            <div className="-mb-3 flex items-center gap-2 rounded-t-2xl border-[3px] border-b-0 border-ink bg-ink px-3 py-1.5 font-mono text-xs text-white">
+              <Mark player={{ ...players[1], color: '#2ADB5C' }} size="1.2em" />
+              <span className="min-w-0 truncate">
+                <span className="opacity-50">$</span> {agentBin} -p "…" -m {options.agentModel}
+              </span>
             </div>
-          )}
-          {match.agent.output && match.agent.status === 'fail' && (
-            <details className="text-xs">
-              <summary className="cursor-pointer font-bold">{t('code.agentOutput')}</summary>
-              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap font-mono leading-snug">{match.agent.output}</pre>
-            </details>
-          )}
-        </section>
+            <AgentLog log={match.log} working={agent?.status === 'working'} name={players[1].name} />
+            {(agent?.changed.length ?? 0) > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="font-bold opacity-60">{t('code.cmp.changed')}</span>
+                {agent?.changed.map((name) => (
+                  <span key={name} className="rounded-full border-2 border-ink bg-paper px-2 py-0.5 font-mono">
+                    {name}
+                  </span>
+                ))}
+              </div>
+            )}
+            {agent?.output && agent.status === 'fail' && (
+              <details className="text-xs">
+                <summary className="cursor-pointer font-bold">{t('code.agentOutput')}</summary>
+                {agent.failures.length > 0 && (
+                  <ul className="mt-1 flex list-disc flex-col gap-0.5 pl-5 font-mono">
+                    {agent.failures.map((name) => (
+                      <li key={name}>{name}</li>
+                    ))}
+                  </ul>
+                )}
+                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap font-mono leading-snug">{agent.output}</pre>
+              </details>
+            )}
+          </section>
+        )}
       </div>
 
       {match.result && (
@@ -279,7 +374,7 @@ export function CodeArena({
           open={resultOpen}
           detail={t('detail.code', { clock: formatClock(match.result.elapsedMs), level: card ? `Lv.${card.level} ${t(LEVELS[card.level].name)}` : '', card: card?.title[i18n.lang] ?? options.card })}
           players={players}
-          rows={compareRows(match)}
+          rows={compareRows(match, practice)}
           onRematch={onRematch}
           onSetup={onSetup}
           onLobby={onLobby}

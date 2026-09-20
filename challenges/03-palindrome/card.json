@@ -45,6 +45,20 @@
   "publicTest": [
     "is-palindrome.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 03: ignores case",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 03: ignores spaces",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 03: still says no",
+      "covers": "task:2"
+    }
+  ],
   "open": "is-palindrome.js",
   "test": "node"
 }

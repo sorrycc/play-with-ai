@@ -11,3 +11,7 @@ test('is empty when there is nothing to count', () => {
 	assert.deepEqual(range(3, 3), []);
 	assert.deepEqual(range(5, 2), []);
 });
+
+test('counts by step', () => {
+	assert.deepEqual(range(0, 10, 5), [0, 5]);
+});

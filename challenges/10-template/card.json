@@ -1,0 +1,74 @@
+{
+  "level": 3,
+  "title": {
+    "zh": "把模板里的占位符填上",
+    "en": "Fill in a template's placeholders"
+  },
+  "intro": {
+    "zh": "render 把 '{name}' 换成值里的 name。现在只认一层名字，找不到就写成 undefined，也没法写出真正的大括号。",
+    "en": "render turns '{name}' into the name from the values. Today it only knows one level of name, writes undefined when it finds nothing, and has no way to write a real brace."
+  },
+  "tasks": {
+    "zh": [
+      "占位符里可以用点走进去：{user.name} 取 values.user.name。",
+      "值不存在时，占位符原样留在结果里。",
+      "{{ 和 }} 表示一个真正的 { 和 }。",
+      "0 和 false 也是值，要写出来；只有 undefined 和 null 算不存在。"
+    ],
+    "en": [
+      "A placeholder may use dots to walk in: {user.name} takes values.user.name.",
+      "When the value is not there, the placeholder stays in the result exactly as written.",
+      "{{ and }} mean one real { and }.",
+      "0 and false are values and get written out; only undefined and null count as missing."
+    ]
+  },
+  "examples": [
+    {
+      "input": "render('{user.name} is {user.age}', {user: {name: 'Ada', age: 36}})",
+      "output": "'Ada is 36'"
+    },
+    {
+      "input": "render('Hi {nope}', {})",
+      "output": "'Hi {nope}'"
+    },
+    {
+      "input": "render('{{literal}}', {})",
+      "output": "'{literal}'"
+    },
+    {
+      "input": "render('{count} left', {count: 0})",
+      "output": "'0 left'"
+    }
+  ],
+  "hint": {
+    "zh": "一次正则同时认三种东西：{{、}}、和 {…}。占位符里按点拆开，一层层往下取。",
+    "en": "One regular expression for all three things: {{, }}, and {…}. Inside a placeholder, split on the dots and walk down a level at a time."
+  },
+  "files": [
+    "render.js",
+    "render.test.js"
+  ],
+  "publicTest": [
+    "render.test.js"
+  ],
+  "hiddenTests": [
+    {
+      "title": "card 10: a dotted path walks into the values",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 10: a value that is not there stays as written",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 10: doubled braces are literal braces",
+      "covers": "task:2"
+    },
+    {
+      "title": "card 10: 0 and false are written out",
+      "covers": "task:3"
+    }
+  ],
+  "open": "render.js",
+  "test": "node"
+}

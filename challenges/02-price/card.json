@@ -47,6 +47,16 @@
   "publicTest": [
     "format-price.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 02: the cents part is always two digits",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 02: prices that were right stay right",
+      "covers": "task:1"
+    }
+  ],
   "open": "format-price.js",
   "test": "node"
 }

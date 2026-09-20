@@ -49,6 +49,20 @@
   "publicTest": [
     "compare-versions.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 05: parts compare as numbers",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 05: a missing part counts as 0",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 05: what was right stays right",
+      "covers": "task:2"
+    }
+  ],
   "open": "compare-versions.js",
   "test": "node"
 }

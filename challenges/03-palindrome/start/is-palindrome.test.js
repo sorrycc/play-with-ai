@@ -10,3 +10,7 @@ test('knows a palindrome', () => {
 test('knows what is not one', () => {
 	assert.equal(isPalindrome('hello'), false);
 });
+
+test('ignores case and spaces', () => {
+	assert.equal(isPalindrome('Level'), true);
+});

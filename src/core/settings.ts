@@ -8,17 +8,21 @@ export interface Settings {
   hiddenGames: GameId[];
   /** The order games appear in. A game missing from the list (added later) goes after the listed ones. */
   gameOrder: GameId[];
+  /** The code duel: the fastest pass on each card, in milliseconds, by card id. */
+  codeBests: Record<string, number>;
 }
 
 const STORAGE_KEY = 'play-with-ai:settings:v1';
-const DEFAULTS: Settings = { hiddenGames: [], gameOrder: [] };
+const DEFAULTS: Settings = { hiddenGames: [], gameOrder: [], codeBests: {} };
 
 function read(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
     if (!saved || typeof saved !== 'object') return DEFAULTS;
     const ids = (list: unknown): GameId[] => (Array.isArray(list) ? list.filter((g): g is GameId => typeof g === 'string') : []);
-    return { hiddenGames: ids(saved.hiddenGames), gameOrder: ids(saved.gameOrder) };
+    const times = (map: unknown): Record<string, number> =>
+      map && typeof map === 'object' ? Object.fromEntries(Object.entries(map).filter(([, ms]) => typeof ms === 'number' && Number.isFinite(ms) && ms > 0)) : {};
+    return { hiddenGames: ids(saved.hiddenGames), gameOrder: ids(saved.gameOrder), codeBests: times(saved.codeBests) };
   } catch {
     return DEFAULTS;
   }
@@ -66,5 +70,15 @@ export const settings = {
   },
   resetGameOrder(): void {
     update({ ...current, gameOrder: [] });
+  },
+  /** The person's fastest pass on a code-duel card, or null if they have never passed it. */
+  codeBest(card: string): number | null {
+    return current.codeBests[card] ?? null;
+  },
+  /** Kept only when it beats what is there: a slower run is still a win, just not a record. */
+  setCodeBest(card: string, ms: number): void {
+    const best = current.codeBests[card];
+    if (!(ms > 0) || (best !== undefined && best <= ms)) return;
+    update({ ...current, codeBests: { ...current.codeBests, [card]: ms } });
   },
 };

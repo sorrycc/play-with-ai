@@ -10,3 +10,7 @@ test('tells older from newer', () => {
 test('knows the same version', () => {
 	assert.equal(compareVersions('1.2.3', '1.2.3'), 0);
 });
+
+test('compares each part as a number', () => {
+	assert.equal(compareVersions('1.10.0', '1.9.0'), 1);
+});

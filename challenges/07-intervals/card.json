@@ -53,6 +53,28 @@
   "publicTest": [
     "merge-intervals.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 07: merges intervals that overlap",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 07: the input need not be sorted",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 07: intervals that only touch are merged too",
+      "covers": "task:2"
+    },
+    {
+      "title": "card 07: an interval inside another disappears into it",
+      "covers": "task:3"
+    },
+    {
+      "title": "card 07: the array passed in is not changed",
+      "covers": "task:4"
+    }
+  ],
   "open": "merge-intervals.js",
   "test": "node"
 }

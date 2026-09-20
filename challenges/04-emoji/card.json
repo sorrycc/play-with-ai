@@ -52,5 +52,19 @@
   "publicTest": [
     "test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 04: rocket and fire become words",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 04: custom replacements still win",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 04: existing emoji keep working",
+      "covers": "task:2"
+    }
+  ],
   "test": "ava"
 }

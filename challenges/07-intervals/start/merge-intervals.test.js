@@ -7,3 +7,7 @@ test('leaves alone what needs no merging', () => {
 	assert.deepEqual(mergeIntervals([[1, 2]]), [[1, 2]]);
 	assert.deepEqual(mergeIntervals([[1, 2], [4, 5]]), [[1, 2], [4, 5]]);
 });
+
+test('merges intervals that overlap', () => {
+	assert.deepEqual(mergeIntervals([[1, 3], [2, 6], [8, 10]]), [[1, 6], [8, 10]]);
+});

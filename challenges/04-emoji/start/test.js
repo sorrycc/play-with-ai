@@ -363,3 +363,7 @@ test('slugifyWithCounter() is not vulnerable to ReDoS', t => {
 
 	t.true(duration < 5000, `Took ${duration.toFixed(0)}ms`);
 });
+
+test('emoji that should become words', t => {
+	t.is(slugify('Ship it 🚀'), 'ship-it-rocket');
+});

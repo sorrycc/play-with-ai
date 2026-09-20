@@ -25,6 +25,7 @@ export function Editor({
   files,
   active,
   editable,
+  writable,
   onEdit,
   onRunTests,
   onSubmit,
@@ -33,6 +34,8 @@ export function Editor({
   files: Record<string, string>;
   active: string;
   editable: boolean;
+  /** Whether this file is the person's to change: the repository's own tests are shown, not edited. */
+  writable: (name: string) => boolean;
   onEdit: (name: string, content: string) => void;
   onRunTests: () => void;
   onSubmit: () => void;
@@ -85,8 +88,9 @@ export function Editor({
       shown.current = active;
       v.setState(state);
     }
-    v.dispatch({ effects: lock.current.reconfigure([EditorState.readOnly.of(!editable), EditorView.editable.of(editable)]) });
-    if (editable) v.focus();
+    const open = editable && writable(active);
+    v.dispatch({ effects: lock.current.reconfigure([EditorState.readOnly.of(!open), EditorView.editable.of(open)]) });
+    if (open) v.focus();
     // `files` changes identity on every keystroke's re-render; only a new tab or lock matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, editable, files[active] === undefined]);

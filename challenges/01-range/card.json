@@ -43,6 +43,16 @@
   "publicTest": [
     "range.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 01: counts by step",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 01: without step it still counts by 1",
+      "covers": "task:1"
+    }
+  ],
   "open": "range.js",
   "test": "node"
 }

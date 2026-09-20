@@ -1,16 +1,16 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { AGENTS, readStreamJson } from '../server/agents.mjs';
 // @ts-expect-error plain .mjs module, the server side of the duel
-import { adjudicate, createDuel, isLocalRequest, promptFor } from '../server/duel.mjs';
+import { adjudicate, createDuel, editableFiles, isLocalRequest, judge, promptFor, readTap } from '../server/duel.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FAKE = join(ROOT, 'tests/fixtures/fake-agent.mjs');
-const CARDS = ['01-range', '02-price', '03-palindrome', '04-emoji', '05-versions', '06-group-by', '07-intervals', '08-lru'];
+const CARDS = ['01-range', '02-price', '03-palindrome', '04-emoji', '05-versions', '06-group-by', '07-intervals', '08-lru', '09-csv', '10-template'];
 /** Each card's fix, as an edit of the file it opens on: a line or two at level 1, a function body at level 3. */
 const SOLUTIONS: Record<string, (source: string) => string> = {
   '01-range': (s) => s.replace('(start, end)', '(start, end, step = 1)').replace('i += 1', 'i += step'),
@@ -26,30 +26,83 @@ const SOLUTIONS: Record<string, (source: string) => string> = {
     s
       .replace('\t\treturn this.map.get(key);', "\t\tif (!this.map.has(key)) return undefined;\n\t\tconst value = this.map.get(key);\n\t\tthis.map.delete(key);\n\t\tthis.map.set(key, value);\n\t\treturn value;")
       .replace('\t\tthis.map.set(key, value);\n\t\treturn this;', "\t\tthis.map.delete(key);\n\t\tthis.map.set(key, value);\n\t\tif (this.map.size > this.capacity) this.map.delete(this.map.keys().next().value);\n\t\treturn this;"),
+  '09-csv': (s) =>
+    s.replace(
+      "\treturn line.split(',');",
+      "\tconst fields = [];\n\tlet field = '';\n\tlet quoted = false;\n\tfor (let i = 0; i < line.length; i++) {\n\t\tconst c = line[i];\n\t\tif (quoted && c === '\"' && line[i + 1] === '\"') {\n\t\t\tfield += '\"';\n\t\t\ti++;\n\t\t} else if (c === '\"') {\n\t\t\tquoted = !quoted;\n\t\t} else if (c === ',' && !quoted) {\n\t\t\tfields.push(field);\n\t\t\tfield = '';\n\t\t} else {\n\t\t\tfield += c;\n\t\t}\n\t}\n\n\tfields.push(field);\n\treturn fields;",
+    ),
+  '10-template': (s) =>
+    s.replace(
+      '\treturn template.replaceAll(/{(\\w+)}/g, (whole, name) => values[name]);',
+      "\treturn template.replaceAll(/{{|}}|{([^{}]*)}/g, (whole, path) => {\n\t\tif (whole === '{{') return '{';\n\t\tif (whole === '}}') return '}';\n\t\tlet value = values;\n\t\tfor (const part of path.split('.')) value = value?.[part];\n\t\treturn value === undefined || value === null ? whole : String(value);\n\t});",
+    ),
 };
 
 const side = (status: string, doneMs: number | null = null) => ({ status, doneMs });
+const at = (human: number, agent: number) => ({ human, agent });
 
 describe('who wins a code duel', () => {
   it('is the side that passes, and nobody while both still work', () => {
-    expect(adjudicate({ human: side('working'), agent: side('working') }, 10_000, 180_000)).toBeNull();
-    expect(adjudicate({ human: side('pass', 60_000), agent: side('working') }, 61_000, 180_000)).toEqual({ winner: 'human', reason: 'pass' });
-    expect(adjudicate({ human: side('working'), agent: side('pass', 90_000) }, 95_000, 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
+    expect(adjudicate({ human: side('working'), agent: side('working') }, at(10_000, 10_000), 180_000)).toBeNull();
+    expect(adjudicate({ human: side('pass', 60_000), agent: side('working') }, at(61_000, 61_000), 180_000)).toEqual({ winner: 'human', reason: 'pass' });
+    expect(adjudicate({ human: side('working'), agent: side('pass', 90_000) }, at(95_000, 95_000), 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
   });
 
   it('waits for a verdict on the side that said "done" first: verifying is off the clock', () => {
     const sides = { human: side('verifying', 80_000), agent: side('pass', 82_000) };
-    expect(adjudicate(sides, 85_000, 180_000)).toBeNull();
-    expect(adjudicate({ ...sides, human: side('pass', 80_000) }, 88_000, 180_000)).toEqual({ winner: 'human', reason: 'pass' });
-    expect(adjudicate({ ...sides, human: side('working', 80_000) }, 88_000, 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
+    expect(adjudicate(sides, at(85_000, 85_000), 180_000)).toBeNull();
+    expect(adjudicate({ ...sides, human: side('pass', 80_000) }, at(88_000, 88_000), 180_000)).toEqual({ winner: 'human', reason: 'pass' });
+    expect(adjudicate({ ...sides, human: side('working', 80_000) }, at(88_000, 88_000), 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
     // Done later than the pass: no reason to wait for it.
-    expect(adjudicate({ human: side('verifying', 90_000), agent: side('pass', 82_000) }, 91_000, 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
+    expect(adjudicate({ human: side('verifying', 90_000), agent: side('pass', 82_000) }, at(91_000, 91_000), 180_000)).toEqual({ winner: 'agent', reason: 'pass' });
   });
 
   it('ends without a winner when time runs out, but not while a verdict is pending', () => {
-    expect(adjudicate({ human: side('working'), agent: side('fail', 50_000) }, 179_000, 180_000)).toBeNull();
-    expect(adjudicate({ human: side('working'), agent: side('killed', 180_000) }, 180_000, 180_000)).toEqual({ winner: null, reason: 'timeout' });
-    expect(adjudicate({ human: side('verifying', 179_000), agent: side('killed', 180_000) }, 181_000, 180_000)).toBeNull();
+    expect(adjudicate({ human: side('working'), agent: side('fail', 50_000) }, at(179_000, 179_000), 180_000)).toBeNull();
+    expect(adjudicate({ human: side('working'), agent: side('killed', 180_000) }, at(180_000, 180_000), 180_000)).toEqual({ winner: null, reason: 'timeout' });
+    expect(adjudicate({ human: side('verifying', 179_000), agent: side('killed', 180_000) }, at(181_000, 181_000), 180_000)).toBeNull();
+  });
+
+  it('gives each side its own clock, so a verdict does not spend the other side time', () => {
+    // The wall clock is past the limit, but the person spent 40 s of it waiting for a verdict.
+    const sides = { human: side('working', 140_000), agent: side('killed', 180_000) };
+    expect(adjudicate(sides, at(150_000, 190_000), 180_000)).toBeNull();
+    expect(adjudicate(sides, at(180_000, 220_000), 180_000)).toEqual({ winner: null, reason: 'timeout' });
+  });
+
+  it('needs nobody on the other side: practice is the same rules with one seat', () => {
+    expect(adjudicate({ human: side('working') }, { human: 10_000 }, 120_000)).toBeNull();
+    expect(adjudicate({ human: side('pass', 44_000) }, { human: 45_000 }, 120_000)).toEqual({ winner: 'human', reason: 'pass' });
+    expect(adjudicate({ human: side('working') }, { human: 120_000 }, 120_000)).toEqual({ winner: null, reason: 'timeout' });
+  });
+});
+
+describe('a verdict is what the tests said, not what the exit code said', () => {
+  const card = { hiddenTests: [{ title: 'card 01: counts by step' }, { title: 'card 01: without step it still counts by 1' }] };
+
+  it('reads TAP from both runners, failures and counts', () => {
+    const tap = readTap(['TAP version 13', 'ok 1 - alpha', 'not ok 2 - beta', '  ---', "  error: |-", '    1 !== 2', "  code: 'ERR_ASSERTION'", '  ...', '1..2', '# tests 2', '# pass 1', '# fail 1'].join('\n'));
+    expect(tap.cases).toEqual([
+      { ok: true, title: 'alpha', detail: '' },
+      { ok: false, title: 'beta', detail: '1 !== 2' },
+    ]);
+    expect(tap).toMatchObject({ tests: 2, pass: 1, fail: 1 });
+    // ava puts the file in front of the title.
+    expect(readTap('ok 1 - challenge › card 01: counts by step').cases[0].title).toBe('challenge › card 01: counts by step');
+  });
+
+  it('counts a hidden test that never ran as a failure, whatever the runner exited with', () => {
+    // What `process.exit(0)` at the top of the source file looks like: a green run with no tests in it.
+    const ducked = judge(card, { ok: true, output: 'TAP version 13\nok 1 - range.test.js\n1..1\n# tests 1\n# pass 1\n# fail 0' });
+    expect(ducked.ok).toBe(false);
+    expect(ducked.failures).toContain('card 01: counts by step');
+    expect(ducked.output).toContain('never ran');
+
+    const real = judge(card, { ok: true, output: 'ok 1 - card 01: counts by step\nok 2 - card 01: without step it still counts by 1\n# pass 2\n# fail 0' });
+    expect(real).toMatchObject({ ok: true, passed: 2, failed: 0 });
+
+    const red = judge(card, { ok: false, output: 'ok 1 - card 01: counts by step\nnot ok 2 - card 01: without step it still counts by 1\n# pass 1\n# fail 1' });
+    expect(red).toMatchObject({ ok: false, failed: 1, failures: ['card 01: without step it still counts by 1'] });
   });
 });
 
@@ -105,6 +158,8 @@ describe('a duel on disk', () => {
     expect(check()).toBe(true);
   };
   const stateOf = (duel: any, id: string) => duel.state(new URLSearchParams({ id }));
+  /** Only what the person may write goes to the server: the repository's own tests are the card's. */
+  const mine = (files: Record<string, string>, editable: string[]) => Object.fromEntries(editable.map((n) => [n, files[n]]));
 
   afterAll(() => Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }))));
 
@@ -116,7 +171,7 @@ describe('a duel on disk', () => {
     const levels = cards.map((c: any) => c.level);
     expect(levels).toEqual([...levels].sort());
     for (const level of [1, 2, 3]) expect(levels.filter((l: number) => l === level).length).toBeGreaterThan(1);
-    for (const card of cards) expect(Object.keys(card)).not.toEqual(expect.arrayContaining(['dir']));
+    for (const card of cards) expect(Object.keys(card)).not.toEqual(expect.arrayContaining(['dir', 'hiddenTests']));
     expect(JSON.stringify(cards)).not.toContain('card 0');
     expect(JSON.stringify(cards)).not.toContain(ROOT);
   });
@@ -136,24 +191,52 @@ describe('a duel on disk', () => {
     }
   });
 
-  it.each(CARDS)('%s has its own repository: the start passes its tests and fails the card, a few lines pass it', async (cardId) => {
+  it('every hidden test is named on its card, and says which task or example asks for it', async () => {
+    for (const id of CARDS) {
+      const card = JSON.parse(await readFile(join(ROOT, 'challenges', id, 'card.json'), 'utf8'));
+      const hidden = await readFile(join(ROOT, 'challenges', id, 'hidden.test.js'), 'utf8');
+      // As many declared as there are, each by the name the runner will print.
+      const titles = [...hidden.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+      expect(titles.sort()).toEqual(card.hiddenTests.map((h: any) => h.title).sort());
+      for (const { covers } of card.hiddenTests) {
+        // Nothing hidden may ask for something the card never showed.
+        const [kind, index] = covers.split(':');
+        expect(['intro', 'task', 'example']).toContain(kind);
+        if (kind === 'task') expect(card.tasks.zh[Number(index)]).toBeTypeOf('string');
+        if (kind === 'example') expect(card.examples[Number(index)]).toBeTypeOf('object');
+      }
+    }
+  });
+
+  it.each(CARDS)('%s has its own repository: the start fails both tests, a few lines pass them', async (cardId) => {
     if (cardId === '04-emoji' && !installed) return;
     const { duel } = await duelWith('hang');
     const { cards } = await duel.cards();
     const card = cards.find((c: any) => c.id === cardId);
-    const { id, files } = await duel.start({ card: cardId, agent: 'fake', limitSec: 120 });
+    const { id, files, editable } = await duel.start({ card: cardId, agent: 'fake', limitSec: 120 });
     expect(Object.keys(files)).toContain(card.open);
+    expect(editable).toEqual(card.editable);
+    // The repository's own tests are shown to both sides, and are nobody's to rewrite.
+    const raw = JSON.parse(await readFile(join(ROOT, 'challenges', cardId, 'card.json'), 'utf8'));
+    expect(editable).toEqual(raw.files.filter((f: string) => !raw.publicTest.includes(f)));
+    expect(editableFiles(raw)).toEqual(editable);
     for (const other of cards) if (other.id !== cardId) expect(Object.keys(files)).not.toContain(other.open);
     await duel.go({ id });
-    expect((await duel.test({ id, files })).ok).toBe(true);
-    expect((await duel.submit({ id, files })).pass).toBe(false);
-    const solved = { ...files, [card.open]: SOLUTIONS[cardId](files[card.open]) };
+
+    // The repository's own tests are red on the start too: pressing Run has something to say.
+    const before = await duel.test({ id, files: mine(files, editable) });
+    expect(before.ok).toBe(false);
+    expect(before.failed).toBeGreaterThan(0);
+    expect((await duel.submit({ id, files: mine(files, editable) })).pass).toBe(false);
+
+    const solved: Record<string, string> = { ...mine(files, editable), [card.open]: SOLUTIONS[cardId](files[card.open]) };
     expect(solved[card.open]).not.toBe(files[card.open]);
+    expect((await duel.test({ id, files: solved })).ok).toBe(true);
     expect((await duel.submit({ id, files: solved })).pass).toBe(true);
     expect(stateOf(duel, id).result).toEqual({ winner: 'human', reason: 'pass' });
-  }, 90_000);
+  }, 120_000);
 
-  it('an agent that solves the card wins, with its log, usage and changed files reported', async () => {
+  it('an agent that solves the card wins, with its log, usage, changed files and patch reported', async () => {
     const { duel } = await duelWith('solve');
     const { id, files, model } = await duel.start({ card: '01-range', agent: 'fake', model: 'nope', limitSec: 120 });
     expect(model).toBe('m1');
@@ -167,30 +250,88 @@ describe('a duel on disk', () => {
     expect(state.agent.log.map((e: any) => e.text)).toEqual(['mode solve', 'Edit range.js']);
     expect(stateOf(duel, id).agent.log.length).toBe(2);
     expect(duel.state(new URLSearchParams({ id, from: '1' })).agent.log.length).toBe(1);
+    // What it wrote, for the result screen.
+    await until(() => stateOf(duel, id).agent.diff !== '');
+    expect(stateOf(duel, id).agent.diff).toContain('i += step');
   }, 60_000);
 
   it('a person may fail, fix and submit again; the agent gets one verdict; the hidden test leaves no trace', async () => {
     const { duel, runsDir } = await duelWith('idle');
-    const { id, files } = await duel.start({ card: '01-range', agent: 'fake', model: 'm2', limitSec: 120 });
+    const { id, files, editable } = await duel.start({ card: '01-range', agent: 'fake', model: 'm2', limitSec: 120 });
     await duel.go({ id });
     await until(() => stateOf(duel, id).agent.status === 'fail');
     expect(stateOf(duel, id).result).toBeNull();
 
-    const tests = await duel.test({ id, files });
-    expect(tests.ok).toBe(true);
-    const first = await duel.submit({ id, files });
+    const first = await duel.submit({ id, files: mine(files, editable) });
     expect(first.pass).toBe(false);
     expect(first.output).toContain('card 01');
+    expect(first.failures.length).toBeGreaterThan(0);
     expect(stateOf(duel, id).human).toMatchObject({ status: 'working', attempts: 1 });
 
     await expect(duel.test({ id, files: { '../escape.js': 'x' } })).rejects.toThrow(/not one of/);
+    // The repository's own tests are shown, not the person's to rewrite.
+    await expect(duel.submit({ id, files: { 'range.test.js': 'nothing to see' } })).rejects.toThrow(/not one of/);
 
-    const second = await duel.submit({ id, files: { ...files, 'range.js': SOLUTIONS['01-range'](files['range.js']) } });
+    const second = await duel.submit({ id, files: { 'range.js': SOLUTIONS['01-range'](files['range.js']) } });
     expect(second.pass).toBe(true);
+    expect(second.passed).toBeGreaterThan(0);
     expect(stateOf(duel, id).result).toEqual({ winner: 'human', reason: 'pass' });
-    expect(await readdir(join(runsDir, id, 'human'))).not.toContain('challenge.test.js');
+    // The run directory goes with the result, hidden test and all.
+    await until(() => !existsSync(join(runsDir, id)));
     await expect(duel.submit({ id, files })).rejects.toThrow(/over/);
   }, 90_000);
+
+  it('a green exit code is not a pass: the card\'s hidden tests have to have run', async () => {
+    const { duel } = await duelWith('idle');
+    const { id, files, editable } = await duel.start({ card: '01-range', agent: 'fake', limitSec: 120 });
+    await duel.go({ id });
+    // `process.exit(0)` before the tests load makes the runner exit 0 with nothing red in it.
+    const ducked = await duel.submit({ id, files: { ...mine(files, editable), 'range.js': `process.exit(0);\n${files['range.js']}` } });
+    expect(ducked.pass).toBe(false);
+    expect(ducked.output).toContain('never ran');
+    expect(stateOf(duel, id).result).toBeNull();
+  }, 60_000);
+
+  it('survives a test that prints without stopping, and says the output was cut', async () => {
+    const { duel } = await duelWith('idle');
+    const { id, files, editable } = await duel.start({ card: '01-range', agent: 'fake', limitSec: 120 });
+    await duel.go({ id });
+    // Eight megabytes of noise. Kept whole, this used to grow a string until V8 threw inside a
+    // stream listener, which took the server with it.
+    const noisy = `const line = 'x'.repeat(1024);\nfor (let i = 0; i < 8192; i++) console.log(line);\n${SOLUTIONS['01-range'](files['range.js'])}`;
+    const verdict = await duel.test({ id, files: { ...mine(files, editable), 'range.js': noisy } });
+    expect(typeof verdict.output).toBe('string');
+    expect(verdict.output.length).toBeLessThan(20_000);
+    // Still answering afterwards: the process is the point of this test.
+    expect((await duel.test({ id, files: { 'range.js': SOLUTIONS['01-range'](files['range.js']) } })).ok).toBe(true);
+  }, 120_000);
+
+  it('gives the person their time back when a verdict takes a while', async () => {
+    const { duel } = await duelWith('idle');
+    const { id, files, editable } = await duel.start({ card: '01-range', agent: 'fake', limitSec: 120 });
+    const wallFrom = Date.now();
+    await duel.go({ id });
+    // One failing verdict, which takes as long as `node --test` takes to start.
+    const before = stateOf(duel, id).elapsedMs;
+    await duel.submit({ id, files: mine(files, editable) });
+    const state = stateOf(duel, id);
+    const wall = Date.now() - wallFrom;
+    expect(state.human.status).toBe('working');
+    // The wall clock ran through the verdict; the person's clock did not.
+    expect(wall - state.elapsedMs).toBeGreaterThan(200);
+    expect(state.elapsedMs).toBeGreaterThanOrEqual(before);
+  }, 60_000);
+
+  it('practice is the same card with nobody on the other side', async () => {
+    const { duel } = await duelWith('idle');
+    const { id, files, editable, practice } = await duel.start({ card: '01-range', agent: 'practice', limitSec: 120 });
+    expect(practice).toBe(true);
+    await duel.go({ id });
+    expect(stateOf(duel, id).agent).toBeFalsy();
+    expect((await duel.submit({ id, files: { 'range.js': SOLUTIONS['01-range'](files['range.js']) } })).pass).toBe(true);
+    expect(stateOf(duel, id).result).toEqual({ winner: 'human', reason: 'pass' });
+    expect(editable).toEqual(['range.js']);
+  }, 60_000);
 
   it('stopping kills an agent that is still working, and so does starting the next duel', async () => {
     const { duel } = await duelWith('hang');
@@ -202,5 +343,26 @@ describe('a duel on disk', () => {
     await duel.go({ id: b.id });
     duel.stop({ id: b.id });
     expect(stateOf(duel, b.id).result).toEqual({ winner: null, reason: 'stopped' });
+  }, 60_000);
+
+  it('takes the agent\'s whole process group with it, helpers of its own included', async () => {
+    const { duel, runsDir } = await duelWith('spawn');
+    const { id } = await duel.start({ card: '01-range', agent: 'fake', limitSec: 120 });
+    await duel.go({ id });
+    const pidFile = join(runsDir, id, 'agent', 'helper.pid');
+    await until(() => existsSync(pidFile));
+    const helper = Number(await readFile(pidFile, 'utf8'));
+    expect(() => process.kill(helper, 0)).not.toThrow();
+
+    duel.stop({ id });
+    // SIGTERM, then SIGKILL for whatever ignored it.
+    await until(() => {
+      try {
+        process.kill(helper, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
   }, 60_000);
 });

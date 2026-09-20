@@ -45,6 +45,20 @@
   "publicTest": [
     "group-by.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 06: groups by a property name, keeping the order",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 06: groups by a function",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 06: nothing to group is still an empty object",
+      "covers": "example:2"
+    }
+  ],
   "open": "group-by.js",
   "test": "node"
 }

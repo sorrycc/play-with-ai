@@ -53,4 +53,24 @@ describe('settings', () => {
     settings.resetGameOrder();
     expect(ids()).toEqual(['tetris', 'gomoku', 'snake', '2048', 'chess']);
   });
+
+  it('remembers the fastest pass on each code-duel card, and only when it is faster', () => {
+    expect(settings.codeBest('01-range')).toBeNull();
+
+    settings.setCodeBest('01-range', 48_000);
+    expect(settings.codeBest('01-range')).toBe(48_000);
+
+    // A slower run is still a win, just not a record.
+    settings.setCodeBest('01-range', 61_000);
+    expect(settings.codeBest('01-range')).toBe(48_000);
+
+    settings.setCodeBest('01-range', 31_500);
+    expect(settings.codeBest('01-range')).toBe(31_500);
+
+    // Cards are kept apart, and a time that is not a time is ignored.
+    settings.setCodeBest('07-intervals', 200_000);
+    settings.setCodeBest('07-intervals', 0);
+    expect(settings.codeBest('07-intervals')).toBe(200_000);
+    expect(settings.codeBest('never-played')).toBeNull();
+  });
 });

@@ -63,7 +63,7 @@ export type Options = {
 
 	Add a leading and trailing space to the replacement to have it separated by dashes.
 
-	@default [ ['&', ' and '], ['🦄', ' unicorn '], ['♥', ' love '] ]
+	@default the list in `overridable-replacements.js`
 
 	@example
 	```

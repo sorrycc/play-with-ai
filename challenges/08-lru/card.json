@@ -47,6 +47,24 @@
   "publicTest": [
     "lru-cache.test.js"
   ],
+  "hiddenTests": [
+    {
+      "title": "card 08: over capacity, the least recently used entry goes",
+      "covers": "task:0"
+    },
+    {
+      "title": "card 08: get counts as a use",
+      "covers": "task:1"
+    },
+    {
+      "title": "card 08: setting a key that is already there counts as a use and drops nothing",
+      "covers": "task:2"
+    },
+    {
+      "title": "card 08: a get that misses changes nothing",
+      "covers": "task:1"
+    }
+  ],
   "open": "lru-cache.js",
   "test": "node"
 }

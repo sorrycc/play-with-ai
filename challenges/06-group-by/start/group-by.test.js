@@ -6,3 +6,7 @@ test('nothing to group gives an empty object', () => {
 	assert.deepEqual(groupBy([], 'type'), {});
 	assert.deepEqual(groupBy([], item => item.type), {});
 });
+
+test('groups by a property name', () => {
+	assert.deepEqual(groupBy([{t: 'a', n: 1}, {t: 'b', n: 2}], 't'), {a: [{t: 'a', n: 1}], b: [{t: 'b', n: 2}]});
+});

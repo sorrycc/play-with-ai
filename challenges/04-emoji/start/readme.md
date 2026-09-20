@@ -102,11 +102,7 @@ slugify('fooBar', {decamelize: false});
 ##### customReplacements
 
 Type: `Array<string[]>`\
-Default: `[
-	['&', ' and '],
-	['🦄', ' unicorn '],
-	['♥', ' love ']
-]`
+Default: the list in `overridable-replacements.js`
 
 Add your own custom replacements.
 
